@@ -13,6 +13,7 @@ builder.Services.AddSingleton<MongoService>();
 builder.Services.AddSingleton<TelegramService>();
 builder.Services.AddSingleton<YahooFinanceService>();
 builder.Services.AddSingleton<FinnhubService>();
+builder.Services.AddSingleton<SignalFilterService>();
 builder.Services.AddHostedService<Worker>();
 
 var host = builder.Build();
