@@ -1,55 +1,27 @@
-using Microsoft.Extensions.Hosting.WindowsServices;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Configuration;
 using PortfolioSignalWorker.Services;
 
-// Determine content root for Windows Service
-var contentRoot = WindowsServiceHelpers.IsWindowsService()
-    ? AppContext.BaseDirectory
-    : Directory.GetCurrentDirectory();
+var builder = Host.CreateApplicationBuilder(args);
 
-var builder = Host.CreateDefaultBuilder(args)
-    .UseContentRoot(contentRoot)
-    .UseWindowsService()
-    .ConfigureServices((context, services) =>
-    {
-        // Core Services - AGGIORNATO per usare YahooFinanceService
-        services.AddSingleton<YahooFinanceService>(); // CAMBIATO DA FinnhubService
-        services.AddSingleton<TelegramService>();
-        services.AddSingleton<MongoService>();
-        services.AddSingleton<MarketHoursService>(); // AGGIUNTO per mercati europei
+// AGGIUNGI QUESTA CONFIGURAZIONE PER LE VARIABILI D'AMBIENTE
+builder.Configuration.AddEnvironmentVariables();
 
-        // Signal Processing
-        services.AddSingleton<SignalFilterService>(provider =>
-        {
-            var mongo = provider.GetRequiredService<MongoService>();
-            var logger = provider.GetRequiredService<ILogger<SignalFilterService>>();
-            return new SignalFilterService(mongo.GetDatabase(), logger);
-        });
-
-        // Symbol Selection Service - AGGIORNATO per usare YahooFinanceService
-        services.AddSingleton<SymbolSelectionService>(provider =>
-        {
-            var mongo = provider.GetRequiredService<MongoService>();
-            var yahooFinance = provider.GetRequiredService<YahooFinanceService>(); // CAMBIATO DA FinnhubService
-            var logger = provider.GetRequiredService<ILogger<SymbolSelectionService>>();
-            return new SymbolSelectionService(mongo.GetDatabase(), yahooFinance, logger); // CAMBIATO DA finnhub
-        });
-
-        // Worker Service
-        services.AddHostedService<Worker>();
-    })
-    .ConfigureLogging((context, logging) =>
-    {
-        logging.ClearProviders();
-        logging.AddConsole();
-
-        // Add Windows Event Log for service
-        if (WindowsServiceHelpers.IsWindowsService())
-        {
-            logging.AddEventLog();
-        }
-
-        logging.SetMinimumLevel(LogLevel.Information);
-    });
+// Registra i servizi
+builder.Services.AddSingleton<MongoService>();
+builder.Services.AddSingleton<TelegramService>();
+builder.Services.AddSingleton<YahooFinanceService>();
+builder.Services.AddSingleton<TradingSignalService>();
+builder.Services.AddHostedService<Worker>();
 
 var host = builder.Build();
+
+// Debug delle variabili d'ambiente
+Console.WriteLine("=== DEBUG ENVIRONMENT VARIABLES ===");
+Console.WriteLine($"Mongo__ConnectionString: {Environment.GetEnvironmentVariable("Mongo__ConnectionString")}");
+Console.WriteLine($"MONGO__CONNECTIONSTRING: {Environment.GetEnvironmentVariable("MONGO__CONNECTIONSTRING")}");
+Console.WriteLine($"Telegram__BotToken: {Environment.GetEnvironmentVariable("Telegram__BotToken")}");
+Console.WriteLine("=====================================");
+
 await host.RunAsync();
