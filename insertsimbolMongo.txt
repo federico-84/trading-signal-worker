@@ -1,0 +1,190 @@
+﻿// ===== SCRIPT PER POPOLARE MONGODB CON SIMBOLI =====
+// Esegui questo script in MongoDB Compass o mongo shell
+
+// 1. CORE SYMBOLS US (mai rimossi)
+db.CoreSymbols.insertMany([
+  // Mega Cap Tech
+  { Symbol: "AAPL", Market: "US", Priority: 1, IsActive: true, Notes: "Apple Inc." },
+  { Symbol: "MSFT", Market: "US", Priority: 2, IsActive: true, Notes: "Microsoft Corp." },
+  { Symbol: "GOOGL", Market: "US", Priority: 3, IsActive: true, Notes: "Alphabet Inc." },
+  { Symbol: "AMZN", Market: "US", Priority: 4, IsActive: true, Notes: "Amazon.com Inc." },
+  { Symbol: "TSLA", Market: "US", Priority: 5, IsActive: true, Notes: "Tesla Inc." },
+  { Symbol: "NVDA", Market: "US", Priority: 6, IsActive: true, Notes: "NVIDIA Corp." },
+  { Symbol: "META", Market: "US", Priority: 7, IsActive: true, Notes: "Meta Platforms Inc." },
+  { Symbol: "NFLX", Market: "US", Priority: 8, IsActive: true, Notes: "Netflix Inc." },
+  { Symbol: "AMD", Market: "US", Priority: 9, IsActive: true, Notes: "Advanced Micro Devices" },
+  { Symbol: "CRM", Market: "US", Priority: 10, IsActive: true, Notes: "Salesforce Inc." },
+  
+  // Large Cap Tech
+  { Symbol: "ORCL", Market: "US", Priority: 11, IsActive: true, Notes: "Oracle Corp." },
+  { Symbol: "ADBE", Market: "US", Priority: 12, IsActive: true, Notes: "Adobe Inc." },
+  { Symbol: "CSCO", Market: "US", Priority: 13, IsActive: true, Notes: "Cisco Systems" },
+  { Symbol: "INTC", Market: "US", Priority: 14, IsActive: true, Notes: "Intel Corp." },
+  { Symbol: "PYPL", Market: "US", Priority: 15, IsActive: true, Notes: "PayPal Holdings" },
+  
+  // Financial
+  { Symbol: "JPM", Market: "US", Priority: 16, IsActive: true, Notes: "JPMorgan Chase" },
+  { Symbol: "V", Market: "US", Priority: 17, IsActive: true, Notes: "Visa Inc." },
+  { Symbol: "MA", Market: "US", Priority: 18, IsActive: true, Notes: "Mastercard Inc." },
+  
+  // Healthcare
+  { Symbol: "JNJ", Market: "US", Priority: 19, IsActive: true, Notes: "Johnson & Johnson" },
+  { Symbol: "UNH", Market: "US", Priority: 20, IsActive: true, Notes: "UnitedHealth Group" },
+  { Symbol: "LLY", Market: "US", Priority: 21, IsActive: true, Notes: "Eli Lilly and Co." },
+  
+  // Consumer
+  { Symbol: "PG", Market: "US", Priority: 22, IsActive: true, Notes: "Procter & Gamble" },
+  { Symbol: "KO", Market: "US", Priority: 23, IsActive: true, Notes: "Coca-Cola Co." },
+  { Symbol: "PEP", Market: "US", Priority: 24, IsActive: true, Notes: "PepsiCo Inc." },
+  { Symbol: "WMT", Market: "US", Priority: 25, IsActive: true, Notes: "Walmart Inc." },
+  { Symbol: "HD", Market: "US", Priority: 26, IsActive: true, Notes: "Home Depot Inc." },
+  { Symbol: "COST", Market: "US", Priority: 27, IsActive: true, Notes: "Costco Wholesale" },
+  { Symbol: "MCD", Market: "US", Priority: 28, IsActive: true, Notes: "McDonald's Corp." },
+  { Symbol: "NKE", Market: "US", Priority: 29, IsActive: true, Notes: "Nike Inc." },
+  { Symbol: "DIS", Market: "US", Priority: 30, IsActive: true, Notes: "Walt Disney Co." }
+]);
+
+// 2. CORE SYMBOLS EU (mai rimossi)
+db.CoreSymbols.insertMany([
+  // Italia (.MI)
+  { Symbol: "ENI.MI", Market: "EU", Priority: 1, IsActive: true, Notes: "Eni SpA - Oil & Gas" },
+  { Symbol: "RACE.MI", Market: "EU", Priority: 2, IsActive: true, Notes: "Ferrari NV" },
+  { Symbol: "LTMC.MI", Market: "EU", Priority: 3, IsActive: true, Notes: "Lottomatica Group" },
+  { Symbol: "ISP.MI", Market: "EU", Priority: 4, IsActive: true, Notes: "Intesa Sanpaolo" },
+  { Symbol: "UCG.MI", Market: "EU", Priority: 5, IsActive: true, Notes: "UniCredit SpA" },
+  { Symbol: "ENEL.MI", Market: "EU", Priority: 6, IsActive: true, Notes: "Enel SpA" },
+  
+  // Olanda (.AS)
+  { Symbol: "ASML.AS", Market: "EU", Priority: 7, IsActive: true, Notes: "ASML Holding NV" },
+  { Symbol: "INGA.AS", Market: "EU", Priority: 8, IsActive: true, Notes: "ING Groep NV" },
+  { Symbol: "HEIA.AS", Market: "EU", Priority: 9, IsActive: true, Notes: "Heineken NV" },
+  { Symbol: "UNA.AS", Market: "EU", Priority: 10, IsActive: true, Notes: "Unilever NV" },
+  
+  // Germania (.DE)
+  { Symbol: "SAP.DE", Market: "EU", Priority: 11, IsActive: true, Notes: "SAP SE" },
+  { Symbol: "SIE.DE", Market: "EU", Priority: 12, IsActive: true, Notes: "Siemens AG" },
+  { Symbol: "BAS.DE", Market: "EU", Priority: 13, IsActive: true, Notes: "BASF SE" },
+  { Symbol: "ALV.DE", Market: "EU", Priority: 14, IsActive: true, Notes: "Allianz SE" },
+  
+  // Francia (.PA)
+  { Symbol: "MC.PA", Market: "EU", Priority: 15, IsActive: true, Notes: "LVMH" },
+  { Symbol: "OR.PA", Market: "EU", Priority: 16, IsActive: true, Notes: "L'Oréal SA" },
+  { Symbol: "TTE.PA", Market: "EU", Priority: 17, IsActive: true, Notes: "TotalEnergies SE" },
+  { Symbol: "BNP.PA", Market: "EU", Priority: 18, IsActive: true, Notes: "BNP Paribas SA" },
+  
+  // Svizzera (.SW)
+  { Symbol: "NESN.SW", Market: "EU", Priority: 19, IsActive: true, Notes: "Nestlé SA" },
+  { Symbol: "NOVN.SW", Market: "EU", Priority: 20, IsActive: true, Notes: "Novartis AG" },
+  { Symbol: "ROG.SW", Market: "EU", Priority: 21, IsActive: true, Notes: "Roche Holding AG" },
+  { Symbol: "UBSG.SW", Market: "EU", Priority: 22, IsActive: true, Notes: "UBS Group AG" }
+]);
+
+// 3. ROTATION SYMBOLS US (possono essere sostituiti)
+db.RotationSymbols.insertMany([
+  // Growth Tech
+  { Symbol: "UBER", Market: "US", Priority: 1, IsActive: true, Notes: "Uber Technologies" },
+  { Symbol: "ABNB", Market: "US", Priority: 2, IsActive: true, Notes: "Airbnb Inc." },
+  { Symbol: "SHOP", Market: "US", Priority: 3, IsActive: true, Notes: "Shopify Inc." },
+  { Symbol: "ROKU", Market: "US", Priority: 4, IsActive: true, Notes: "Roku Inc." },
+  { Symbol: "PLTR", Market: "US", Priority: 5, IsActive: true, Notes: "Palantir Technologies" },
+  { Symbol: "SNOW", Market: "US", Priority: 6, IsActive: true, Notes: "Snowflake Inc." },
+  { Symbol: "COIN", Market: "US", Priority: 7, IsActive: true, Notes: "Coinbase Global" },
+  { Symbol: "RBLX", Market: "US", Priority: 8, IsActive: true, Notes: "Roblox Corp." },
+  { Symbol: "NET", Market: "US", Priority: 9, IsActive: true, Notes: "Cloudflare Inc." },
+  { Symbol: "CRWD", Market: "US", Priority: 10, IsActive: true, Notes: "CrowdStrike Holdings" },
+  
+  // Fintech/Finance
+  { Symbol: "HOOD", Market: "US", Priority: 11, IsActive: true, Notes: "Robinhood Markets" },
+  { Symbol: "SOFI", Market: "US", Priority: 12, IsActive: true, Notes: "SoFi Technologies" },
+  { Symbol: "AFRM", Market: "US", Priority: 13, IsActive: true, Notes: "Affirm Holdings" },
+  
+  // Meme/Volatile
+  { Symbol: "GME", Market: "US", Priority: 14, IsActive: true, Notes: "GameStop Corp." },
+  { Symbol: "AMC", Market: "US", Priority: 15, IsActive: true, Notes: "AMC Entertainment" },
+  
+  // EV/Auto
+  { Symbol: "LCID", Market: "US", Priority: 16, IsActive: true, Notes: "Lucid Group Inc." },
+  { Symbol: "RIVN", Market: "US", Priority: 17, IsActive: true, Notes: "Rivian Automotive" },
+  
+  // Biotech/Health
+  { Symbol: "MRNA", Market: "US", Priority: 18, IsActive: true, Notes: "Moderna Inc." },
+  { Symbol: "BNTX", Market: "US", Priority: 19, IsActive: true, Notes: "BioNTech SE" },
+  
+  // Consumer/Entertainment
+  { Symbol: "PTON", Market: "US", Priority: 20, IsActive: true, Notes: "Peloton Interactive" },
+  { Symbol: "DASH", Market: "US", Priority: 21, IsActive: true, Notes: "DoorDash Inc." },
+  { Symbol: "SPOT", Market: "US", Priority: 22, IsActive: true, Notes: "Spotify Technology" },
+  { Symbol: "SNAP", Market: "US", Priority: 23, IsActive: true, Notes: "Snap Inc." },
+  { Symbol: "PINS", Market: "US", Priority: 24, IsActive: true, Notes: "Pinterest Inc." },
+  { Symbol: "ETSY", Market: "US", Priority: 25, IsActive: true, Notes: "Etsy Inc." }
+]);
+
+// 4. ROTATION SYMBOLS EU (possono essere sostituiti)
+db.RotationSymbols.insertMany([
+  // Italia
+  { Symbol: "CPR.MI", Market: "EU", Priority: 1, IsActive: true, Notes: "Davide Campari-Milano" },
+  { Symbol: "BMED.MI", Market: "EU", Priority: 2, IsActive: true, Notes: "Banca Mediolanum" },
+  
+  // Olanda
+  { Symbol: "ADYEN.AS", Market: "EU", Priority: 3, IsActive: true, Notes: "Adyen NV" },
+  { Symbol: "ASM.AS", Market: "EU", Priority: 4, IsActive: true, Notes: "ASM International" },
+  
+  // Germania
+  { Symbol: "MBG.DE", Market: "EU", Priority: 5, IsActive: true, Notes: "Mercedes-Benz Group" },
+  { Symbol: "BMW.DE", Market: "EU", Priority: 6, IsActive: true, Notes: "Bayerische Motoren Werke" },
+  { Symbol: "IFX.DE", Market: "EU", Priority: 7, IsActive: true, Notes: "Infineon Technologies" },
+  
+  // Francia
+  { Symbol: "KER.PA", Market: "EU", Priority: 8, IsActive: true, Notes: "Kering SA" },
+  { Symbol: "CAP.PA", Market: "EU", Priority: 9, IsActive: true, Notes: "Capgemini SE" },
+  
+  // UK
+  { Symbol: "SHEL.L", Market: "EU", Priority: 10, IsActive: true, Notes: "Shell plc" },
+  { Symbol: "AZN.L", Market: "EU", Priority: 11, IsActive: true, Notes: "AstraZeneca PLC" },
+  { Symbol: "ULVR.L", Market: "EU", Priority: 12, IsActive: true, Notes: "Unilever PLC" }
+]);
+
+// 5. VERIFICA INSERIMENTO
+print("=== SUMMARY ===");
+print("Core US symbols:", db.CoreSymbols.countDocuments({Market: "US", IsActive: true}));
+print("Core EU symbols:", db.CoreSymbols.countDocuments({Market: "EU", IsActive: true}));
+print("Rotation US symbols:", db.RotationSymbols.countDocuments({Market: "US", IsActive: true}));
+print("Rotation EU symbols:", db.RotationSymbols.countDocuments({Market: "EU", IsActive: true}));
+print("Total active symbols:", 
+  db.CoreSymbols.countDocuments({IsActive: true}) + 
+  db.RotationSymbols.countDocuments({IsActive: true})
+);
+
+// 6. ESEMPI DI GESTIONE DINAMICA
+
+// Aggiungi nuovo simbolo core
+// db.CoreSymbols.insertOne({
+//   Symbol: "QCOM", 
+//   Market: "US", 
+//   Priority: 31, 
+//   IsActive: true, 
+//   Notes: "Qualcomm - 5G leader", 
+//   CreatedAt: new Date()
+// });
+
+// Aggiungi nuovo simbolo rotation
+// db.RotationSymbols.insertOne({
+//   Symbol: "HOOD", 
+//   Market: "US", 
+//   Priority: 26, 
+//   IsActive: true, 
+//   Notes: "Robinhood - retail trading", 
+//   CreatedAt: new Date()
+// });
+
+// Disattiva simbolo
+// db.CoreSymbols.updateOne(
+//   {Symbol: "INTC"}, 
+//   {$set: {IsActive: false, Notes: "Temporarily disabled due to poor performance"}}
+// );
+
+// Riattiva simbolo
+// db.CoreSymbols.updateOne(
+//   {Symbol: "INTC"}, 
+//   {$set: {IsActive: true, Notes: "Re-enabled"}}
+// );
