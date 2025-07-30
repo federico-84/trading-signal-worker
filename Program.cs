@@ -12,7 +12,7 @@ builder.Configuration.AddEnvironmentVariables();
 builder.Services.AddSingleton<MongoService>();
 builder.Services.AddSingleton<TelegramService>();
 builder.Services.AddSingleton<YahooFinanceService>();
-builder.Services.AddSingleton<TradingSignalService>();
+builder.Services.AddSingleton<FinnhubService>();
 builder.Services.AddHostedService<Worker>();
 
 var host = builder.Build();
