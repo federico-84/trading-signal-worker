@@ -4,11 +4,9 @@ namespace PortfolioSignalWorker.Services
 {
     public class MarketHoursService
     {
-        private readonly ILogger<MarketHoursService> _logger;
 
-        public MarketHoursService(ILogger<MarketHoursService> logger)
+        public MarketHoursService()
         {
-            _logger = logger;
         }
 
         public bool IsMarketOpen(string symbol)

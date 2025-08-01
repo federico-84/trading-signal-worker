@@ -7,8 +7,8 @@ namespace PortfolioSignalWorker.Services
     public class SymbolSelectionService
     {
         private readonly IMongoCollection<WatchlistSymbol> _watchlistCollection;
-        private readonly IMongoCollection<CoreSymbol> _coreSymbolsCollection;      // NUOVO
-        private readonly IMongoCollection<RotationSymbol> _rotationSymbolsCollection; // NUOVO
+        private readonly IMongoCollection<CoreSymbol> _coreSymbolsCollection;
+        private readonly IMongoCollection<RotationSymbol> _rotationSymbolsCollection;
         private readonly YahooFinanceService _yahooFinance;
         private readonly ILogger<SymbolSelectionService> _logger;
 
@@ -18,8 +18,8 @@ namespace PortfolioSignalWorker.Services
             ILogger<SymbolSelectionService> logger)
         {
             _watchlistCollection = database.GetCollection<WatchlistSymbol>("WatchlistSymbols");
-            _coreSymbolsCollection = database.GetCollection<CoreSymbol>("CoreSymbols");           // NUOVO
-            _rotationSymbolsCollection = database.GetCollection<RotationSymbol>("RotationSymbols"); // NUOVO
+            _coreSymbolsCollection = database.GetCollection<CoreSymbol>("CoreSymbols");
+            _rotationSymbolsCollection = database.GetCollection<RotationSymbol>("RotationSymbols");
             _yahooFinance = yahooFinance;
             _logger = logger;
 
