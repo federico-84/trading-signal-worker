@@ -64,6 +64,7 @@ namespace PortfolioSignalWorker.Services
                     RSI = current.RSI,
                     MACD_Histogram = current.MACD_Histogram,
                     Price = current.Price,
+                    Volume = current.Volume,
                     SignalHash = GenerateSignalHash(symbol, "BASIC_BUY", current.RSI)
                 };
             }
@@ -80,6 +81,7 @@ namespace PortfolioSignalWorker.Services
                     RSI = current.RSI,
                     MACD_Histogram = current.MACD_Histogram,
                     Price = current.Price,
+                    Volume = current.Volume,
                     SignalHash = GenerateSignalHash(symbol, "WARNING", current.RSI)
                 };
             }
@@ -201,6 +203,7 @@ namespace PortfolioSignalWorker.Services
                     RSI = enhanced.RSI,
                     MACD_Histogram = enhanced.MACD_Histogram,
                     Price = enhanced.Price,
+                    Volume = enhanced.Volume,
                     SignalHash = GenerateSignalHash(symbol, "STRONG_BUY", enhanced.RSI)
                 };
             }
@@ -218,6 +221,7 @@ namespace PortfolioSignalWorker.Services
                     RSI = enhanced.RSI,
                     MACD_Histogram = enhanced.MACD_Histogram,
                     Price = enhanced.Price,
+                    Volume = enhanced.Volume,
                     SignalHash = GenerateSignalHash(symbol, "MEDIUM_BUY", enhanced.RSI)
                 };
             }
@@ -235,6 +239,7 @@ namespace PortfolioSignalWorker.Services
                     RSI = enhanced.RSI,
                     MACD_Histogram = enhanced.MACD_Histogram,
                     Price = enhanced.Price,
+                    Volume = enhanced.Volume,
                     SignalHash = GenerateSignalHash(symbol, "WARNING", enhanced.RSI)
                 };
             }

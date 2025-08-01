@@ -13,9 +13,11 @@ public class MongoService
     public MongoService(IConfiguration config)
     {
         //var client = new MongoClient(config["Mongo:ConnectionString"]);
+
         var connectionString = config["Mongo:ConnectionString"] ?? config["MONGO_DEBUG"] ?? Environment.GetEnvironmentVariable("Mongo__ConnectionString");
         Console.WriteLine($"Connection string: {connectionString}");
         var client = new MongoClient(connectionString);
+
         _database = client.GetDatabase(config["Mongo:Database"]);
         _indicatorCollection = _database.GetCollection<StockIndicator>("Indicators");
         _signalCollection = _database.GetCollection<TradingSignal>("TradingSignals");
