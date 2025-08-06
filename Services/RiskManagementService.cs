@@ -136,40 +136,59 @@ namespace PortfolioSignalWorker.Services
         {
             try
             {
-                // Ottieni dati storici per supporti/resistenze
                 var historicalData = await _yahooFinance.GetHistoricalDataAsync(symbol, 30);
-
                 var highs = historicalData["h"]?.ToObject<List<double>>() ?? new List<double>();
                 var lows = historicalData["l"]?.ToObject<List<double>>() ?? new List<double>();
+                var closes = historicalData["c"]?.ToObject<List<double>>() ?? new List<double>();
 
                 if (highs.Count < 20 || lows.Count < 20)
                 {
                     return (0, 0);
                 }
 
-                // Supporto: media dei minimi degli ultimi 20 giorni (ma più peso ai recenti)
-                var recentLows = lows.Take(20).ToList();
-                var support = recentLows.Take(10).Average() * 0.7 + recentLows.Skip(10).Average() * 0.3;
+                var currentPrice = closes.First(); // Prezzo più recente
 
-                // Resistenza: media dei massimi degli ultimi 20 giorni
+                // CORREZIONE: Trova i livelli di supporto e resistenza REALI
+                // Supporto = il massimo tra i minimi recenti che sia SOTTO il prezzo corrente
+                var recentLows = lows.Take(20).ToList();
+                var validSupports = recentLows.Where(low => low < currentPrice * 0.98).ToList(); // 2% buffer
+                var support = validSupports.Any() ? validSupports.Max() : currentPrice * 0.95;
+
+                // Resistenza = il minimo tra i massimi recenti che sia SOPRA il prezzo corrente  
                 var recentHighs = highs.Take(20).ToList();
-                var resistance = recentHighs.Take(10).Average() * 0.7 + recentHighs.Skip(10).Average() * 0.3;
+                var validResistances = recentHighs.Where(high => high > currentPrice * 1.02).ToList(); // 2% buffer
+                var resistance = validResistances.Any() ? validResistances.Min() : currentPrice * 1.05;
+
+                // VALIDAZIONE FINALE
+                if (support >= currentPrice)
+                {
+                    support = currentPrice * 0.95; // 5% sotto il prezzo corrente
+                    _logger.LogWarning($"Support adjusted to {support:F2} for {symbol} (was above current price)");
+                }
+
+                if (resistance <= currentPrice)
+                {
+                    resistance = currentPrice * 1.05; // 5% sopra il prezzo corrente  
+                    _logger.LogWarning($"Resistance adjusted to {resistance:F2} for {symbol} (was below current price)");
+                }
+
+                _logger.LogDebug($"S/R for {symbol}: Support={support:F2}, Resistance={resistance:F2}, Current={currentPrice:F2}");
 
                 return (support, resistance);
             }
             catch (Exception ex)
             {
-                _logger.LogWarning($"Error calculating support/resistance for {symbol}: {ex.Message}");
+                _logger.LogError(ex, "Error calculating S/R for {symbol}", symbol);
                 return (0, 0);
             }
         }
 
         private LevelCalculationResult CalculateRiskLevels(
-            double currentPrice,
-            double atr,
-            double support,
-            double resistance,
-            double confidence)
+    double currentPrice,
+    double atr,
+    double support,
+    double resistance,
+    double confidence)
         {
             var result = new LevelCalculationResult();
 
@@ -177,8 +196,34 @@ namespace PortfolioSignalWorker.Services
             if (_riskParams.UseATRForStopLoss && atr > 0)
             {
                 var atrStopDistance = atr * _riskParams.ATRMultiplier;
-                result.StopLoss = Math.Max(currentPrice - atrStopDistance, support * 0.98); // Non sotto supporto
-                result.CalculationMethod = $"ATR-based (ATR={atr:F3}, multiplier={_riskParams.ATRMultiplier})";
+                var atrBasedStop = currentPrice - atrStopDistance;
+
+                // 🔥 CORREZIONE CRITICA: Valida che support sia sotto il prezzo corrente
+                if (support > 0 && support < currentPrice)
+                {
+                    // Support valido: usa il maggiore tra ATR stop e support
+                    result.StopLoss = Math.Max(atrBasedStop, support * 0.98);
+                    result.CalculationMethod = $"ATR-based (ATR={atr:F3}, multiplier={_riskParams.ATRMultiplier}) with support floor";
+                }
+                else
+                {
+                    // Support non valido: usa solo ATR
+                    result.StopLoss = atrBasedStop;
+                    result.CalculationMethod = $"ATR-based only (ATR={atr:F3}, multiplier={_riskParams.ATRMultiplier}) - invalid support";
+
+                    if (support > currentPrice)
+                    {
+                        _logger.LogWarning($"Invalid support {support:F2} > price {currentPrice:F2} - ignoring support level");
+                    }
+                }
+
+                // 🛡️ VALIDAZIONE FINALE: StopLoss non può mai essere >= currentPrice per BUY signal
+                if (result.StopLoss >= currentPrice)
+                {
+                    _logger.LogError($"CRITICAL ERROR: StopLoss {result.StopLoss:F2} >= Price {currentPrice:F2} - forcing fallback");
+                    result.StopLoss = currentPrice * 0.95; // 5% sotto come fallback sicuro
+                    result.CalculationMethod = "FALLBACK: 5% below current price (invalid calculation detected)";
+                }
             }
             else
             {
@@ -190,9 +235,9 @@ namespace PortfolioSignalWorker.Services
 
             // Take Profit intelligente basato su confidence e resistenza
             var takeProfitPercent = GetDynamicTakeProfitPercent(confidence);
-
-            // Se abbiamo una resistenza valida, non superarla troppo
             var calculatedTakeProfit = currentPrice * (1 + takeProfitPercent / 100);
+
+            // 🔥 CORREZIONE: Valida che resistance sia sopra il prezzo corrente
             if (resistance > currentPrice && calculatedTakeProfit > resistance * 0.95)
             {
                 result.TakeProfit = resistance * 0.95; // 5% sotto resistenza
@@ -201,6 +246,18 @@ namespace PortfolioSignalWorker.Services
             else
             {
                 result.TakeProfit = calculatedTakeProfit;
+
+                if (resistance > 0 && resistance <= currentPrice)
+                {
+                    _logger.LogWarning($"Invalid resistance {resistance:F2} <= price {currentPrice:F2} - ignoring resistance level");
+                }
+            }
+
+            // 🛡️ VALIDAZIONE FINALE: TakeProfit deve essere > currentPrice per BUY signal
+            if (result.TakeProfit <= currentPrice)
+            {
+                _logger.LogError($"CRITICAL ERROR: TakeProfit {result.TakeProfit:F2} <= Price {currentPrice:F2} - forcing fallback");
+                result.TakeProfit = currentPrice * 1.10; // 10% sopra come fallback sicuro
             }
 
             // Calcola percentuali effettive
@@ -225,6 +282,9 @@ namespace PortfolioSignalWorker.Services
             result.SupportLevel = support;
             result.ResistanceLevel = resistance;
             result.Reasoning = $"SL: {result.CalculationMethod}, TP: {takeProfitPercent:F1}% target, R/R: 1:{result.RiskRewardRatio:F1}";
+
+            // 📊 LOG DI DEBUG per monitorare i calcoli
+            _logger.LogDebug($"Risk levels for symbol: Price={currentPrice:F2}, SL={result.StopLoss:F2} ({result.StopLossPercent:F1}%), TP={result.TakeProfit:F2} ({result.TakeProfitPercent:F1}%), R/R=1:{result.RiskRewardRatio:F1}");
 
             return result;
         }

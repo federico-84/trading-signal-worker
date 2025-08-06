@@ -1,9 +1,9 @@
 ﻿
 Microsoft Visual Studio Solution File, Format Version 12.00
 # Visual Studio Version 17
-VisualStudioVersion = 17.14.36203.30 d17.14
+VisualStudioVersion = 17.14.36327.8 d17.14
 MinimumVisualStudioVersion = 10.0.40219.1
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "PortfolioSignalWorker", "PortfolioSignalWorker\PortfolioSignalWorker.csproj", "{EDEA5C81-880E-481F-844D-2A55CF3B13FC}"
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "PortfolioSignalWorker", "PortfolioSignalWorker.csproj", "{6B3B1491-1545-C543-16A3-758FBB3999B8}"
 EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
@@ -11,15 +11,15 @@ Global
 		Release|Any CPU = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(ProjectConfigurationPlatforms) = postSolution
-		{EDEA5C81-880E-481F-844D-2A55CF3B13FC}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
-		{EDEA5C81-880E-481F-844D-2A55CF3B13FC}.Debug|Any CPU.Build.0 = Debug|Any CPU
-		{EDEA5C81-880E-481F-844D-2A55CF3B13FC}.Release|Any CPU.ActiveCfg = Release|Any CPU
-		{EDEA5C81-880E-481F-844D-2A55CF3B13FC}.Release|Any CPU.Build.0 = Release|Any CPU
+		{6B3B1491-1545-C543-16A3-758FBB3999B8}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{6B3B1491-1545-C543-16A3-758FBB3999B8}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{6B3B1491-1545-C543-16A3-758FBB3999B8}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{6B3B1491-1545-C543-16A3-758FBB3999B8}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
 	EndGlobalSection
 	GlobalSection(ExtensibilityGlobals) = postSolution
-		SolutionGuid = {AD74171A-E3CC-4B89-9CD8-4EEB650A6860}
+		SolutionGuid = {62628E3E-5EA1-4227-8C18-E257DF0D1D27}
 	EndGlobalSection
 EndGlobal
