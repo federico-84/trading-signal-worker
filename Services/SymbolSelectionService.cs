@@ -1,6 +1,7 @@
 ﻿using MongoDB.Driver;
 using Newtonsoft.Json.Linq;
 using PortfolioSignalWorker.Models;
+using static PortfolioSignalWorker.Services.SmartMarketHoursService;
 
 namespace PortfolioSignalWorker.Services
 {
@@ -25,6 +26,206 @@ namespace PortfolioSignalWorker.Services
 
             CreateIndexes();
         }
+
+
+        public async Task ClassifySymbolVolatility(WatchlistSymbol symbol)
+        {
+            try
+            {
+                // Calcola volatilità media degli ultimi 10 giorni
+                var historicalData = await _yahooFinance.GetHistoricalDataAsync(symbol.Symbol, 10);
+                var closes = historicalData["c"]?.ToObject<List<double>>() ?? new List<double>();
+                var opens = historicalData["o"]?.ToObject<List<double>>() ?? new List<double>();
+
+                if (closes.Count >= 5 && opens.Count >= 5)
+                {
+                    var dailyMoves = new List<double>();
+                    for (int i = 0; i < Math.Min(closes.Count, opens.Count); i++)
+                    {
+                        if (opens[i] > 0)
+                        {
+                            var dailyMove = Math.Abs((closes[i] - opens[i]) / opens[i]) * 100;
+                            dailyMoves.Add(dailyMove);
+                        }
+                    }
+
+                    symbol.AverageVolatilityPercent = dailyMoves.Average();
+                    symbol.LastVolatilityUpdate = DateTime.UtcNow;
+
+                    // Classifica il livello di volatilità
+                    symbol.VolatilityLevel = symbol.AverageVolatilityPercent switch
+                    {
+                        < 2.0 => VolatilityLevel.Low,
+                        < 5.0 => VolatilityLevel.Standard,
+                        < 10.0 => VolatilityLevel.High,
+                        _ => VolatilityLevel.Explosive
+                    };
+
+                    // Conta giorni consecutivi di alta volatilità
+                    var highVolDays = dailyMoves.TakeWhile(move => move > 3.0).Count();
+                    symbol.ConsecutiveHighVolDays = highVolDays;
+
+                    // Flag come breakout candidate se volatilità in crescita
+                    symbol.IsBreakoutCandidate = highVolDays >= 2 && symbol.AverageVolatilityPercent > 7.0;
+
+                    // Aggiorna nel database
+                    await UpdateSymbolVolatilityInDatabase(symbol);
+
+                    _logger.LogInformation($"📊 Volatility classified: {symbol.Symbol} = {symbol.VolatilityLevel} " +
+                        $"(avg: {symbol.AverageVolatilityPercent:F1}%, consecutive high: {highVolDays} days)");
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error classifying volatility for {symbol}", symbol.Symbol);
+            }
+        }
+
+        private async Task UpdateSymbolVolatilityInDatabase(WatchlistSymbol symbol)
+        {
+            var filter = Builders<WatchlistSymbol>.Filter.Eq(x => x.Symbol, symbol.Symbol);
+            var update = Builders<WatchlistSymbol>.Update
+                .Set(x => x.VolatilityLevel, symbol.VolatilityLevel)
+                .Set(x => x.AverageVolatilityPercent, symbol.AverageVolatilityPercent)
+                .Set(x => x.LastVolatilityUpdate, symbol.LastVolatilityUpdate)
+                .Set(x => x.ConsecutiveHighVolDays, symbol.ConsecutiveHighVolDays)
+                .Set(x => x.IsBreakoutCandidate, symbol.IsBreakoutCandidate)
+                .Set(x => x.LastUpdated, DateTime.UtcNow);
+
+            await _watchlistCollection.UpdateOneAsync(filter, update);
+        }
+
+        public async Task UpdateDynamicFrequencies()
+        {
+            var allSymbols = await GetWatchlistSummary();
+
+            foreach (var symbol in allSymbols)
+            {
+                // Ricalcola volatilità ogni 24 ore
+                if ((DateTime.UtcNow - symbol.LastVolatilityUpdate).TotalHours > 24)
+                {
+                    await ClassifySymbolVolatility(symbol);
+                }
+
+                // La frequenza viene gestita dinamicamente nel SmartMarketHoursService
+                _logger.LogDebug($"🔄 Volatility check: {symbol.Symbol} = {symbol.VolatilityLevel} " +
+                    $"(last update: {(DateTime.UtcNow - symbol.LastVolatilityUpdate).TotalHours:F1}h ago)");
+            }
+        }
+
+        public async Task PopulateVolatileSymbols()
+        {
+            var explosiveSymbols = new[]
+            {
+        // Meme/Volatili US
+        ("GME", "GameStop - meme explosive"),
+        ("AMC", "AMC Entertainment - meme explosive"),
+        ("COIN", "Coinbase - crypto dependent"),
+        ("HOOD", "Robinhood - retail trading dependent"),
+        ("ROKU", "Roku - streaming volatility"),
+        ("PTON", "Peloton - consumer cyclical"),
+        ("SHOP", "Shopify - e-commerce growth"),
+        ("ABNB", "Airbnb - travel dependent"),
+        ("UBER", "Uber - gig economy"),
+        ("SNAP", "Snapchat - social media ads"),
+        ("PINS", "Pinterest - advertising dependent"),
+        ("RBLX", "Roblox - gaming/metaverse"),
+        ("PLTR", "Palantir - government contracts"),
+        ("SNOW", "Snowflake - cloud growth"),
+        ("NET", "Cloudflare - cloud security"),
+        ("CRWD", "CrowdStrike - cybersecurity"),
+        
+        // Crypto/Fintech
+        ("SQ", "Block (Square) - crypto exposure"),
+        ("MSTR", "MicroStrategy - bitcoin holdings"),
+        ("RIOT", "Riot Platforms - bitcoin mining"),
+        ("MARA", "Marathon Digital - bitcoin mining"),
+        
+        // Growth Tech Volatili
+        ("ZM", "Zoom - work from home play"),
+        ("DOCU", "DocuSign - digital transformation"),
+        ("TWLO", "Twilio - communication APIs"),
+        ("OKTA", "Okta - identity management"),
+        
+        // Biotech Volatili  
+        ("MRNA", "Moderna - mRNA technology"),
+        ("BNTX", "BioNTech - vaccine technology"),
+        ("NVAX", "Novavax - vaccine development")
+    };
+
+            foreach (var (symbol, notes) in explosiveSymbols)
+            {
+                // Controlla se esiste già
+                var existing = await _rotationSymbolsCollection
+                    .Find(Builders<RotationSymbol>.Filter.Eq(x => x.Symbol, symbol))
+                    .FirstOrDefaultAsync();
+
+                if (existing == null)
+                {
+                    var rotationSymbol = new RotationSymbol
+                    {
+                        Symbol = symbol,
+                        Market = "US",
+                        Priority = 1, // Alta priorità per volatili
+                        IsActive = true,
+                        Notes = $"VOLATILE: {notes}",
+                        CreatedAt = DateTime.UtcNow
+                    };
+
+                    await _rotationSymbolsCollection.InsertOneAsync(rotationSymbol);
+                    _logger.LogInformation($"💥 Added explosive symbol: {symbol}");
+                }
+                else
+                {
+                    _logger.LogDebug($"💥 Explosive symbol already exists: {symbol}");
+                }
+            }
+
+            _logger.LogInformation($"💥 Volatile symbols population completed");
+        }
+
+        // 3. Timing dinamico basato su volatilità
+
+        public TimeSpan GetDynamicMonitoringFrequency(WatchlistSymbol symbol, AnalysisMode mode)
+        {
+            var baseFrequency = mode switch
+            {
+                AnalysisMode.FullAnalysis => symbol.VolatilityLevel switch
+                {
+                    VolatilityLevel.Explosive => TimeSpan.FromMinutes(5),   // 🚀 Esplosivi ogni 5 min!
+                    VolatilityLevel.High => TimeSpan.FromMinutes(15),       // 📈 Volatili ogni 15 min
+                    VolatilityLevel.Standard => TimeSpan.FromMinutes(30),   // 📊 Standard ogni 30 min
+                    VolatilityLevel.Low => TimeSpan.FromHours(2),           // 😴 Lenti ogni 2 ore
+                    _ => TimeSpan.FromMinutes(30)
+                },
+
+                AnalysisMode.PreMarketWatch => symbol.VolatilityLevel switch
+                {
+                    VolatilityLevel.Explosive => TimeSpan.FromMinutes(10),  // Pre-market esplosivi
+                    VolatilityLevel.High => TimeSpan.FromMinutes(30),
+                    _ => TimeSpan.FromHours(1)
+                },
+
+                AnalysisMode.OffHoursMonitor => symbol.VolatilityLevel switch
+                {
+                    VolatilityLevel.Explosive => TimeSpan.FromHours(2),     // Anche off-hours per esplosivi
+                    VolatilityLevel.High => TimeSpan.FromHours(4),
+                    _ => TimeSpan.FromHours(8)
+                },
+
+                _ => TimeSpan.FromHours(4)
+            };
+
+            // 🔥 BOOST per breakout candidates
+            if (symbol.IsBreakoutCandidate)
+            {
+                baseFrequency = TimeSpan.FromTicks(baseFrequency.Ticks / 2); // 2x più frequente
+                _logger.LogDebug($"🚀 BREAKOUT CANDIDATE boost: {symbol.Symbol} frequency = {baseFrequency}");
+            }
+
+            return baseFrequency;
+        }
+
 
         private void CreateIndexes()
         {

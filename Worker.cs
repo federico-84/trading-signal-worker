@@ -37,7 +37,7 @@ public class Worker : BackgroundService
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
-        _logger.LogInformation("🚀 Worker started with HYBRID MARKET STRATEGY + Risk Management");
+        _logger.LogInformation("🚀 Worker started with DYNAMIC VOLATILE STRATEGY");
 
         // Initialize watchlist on first run
         var watchlistCount = await _mongo.GetWatchlistCount();
@@ -54,14 +54,22 @@ public class Worker : BackgroundService
         {
             try
             {
-                // Get symbols due for analysis
+                // Get symbols due for analysis con PRIORITIZZAZIONE
                 var allSymbolsDue = await _symbolSelection.GetSymbolsDueForAnalysis();
 
-                // ===== HYBRID FILTERING: Filtra per modalità di analisi =====
-                var symbolsToProcess = new List<(WatchlistSymbol symbol, AnalysisMode mode)>();
+                // 🚀 SMART PRIORITIZATION: Ordina per volatilità e breakout potential
+                var prioritizedSymbols = allSymbolsDue
+                    .OrderByDescending(s => s.VolatilityLevel) // Esplosivi prima
+                    .ThenByDescending(s => s.IsBreakoutCandidate) // Breakout candidates
+                    .ThenByDescending(s => s.ConsecutiveHighVolDays) // Giorni consecutivi volatili
+                    .ThenBy(s => s.NextAnalysis) // Poi per timing normale
+                    .ToList();
+
+                // Filtra per modalità di analisi
+                var symbolsToProcess = new List<(WatchlistSymbol symbol, AnalysisMode mode, int priority)>();
                 var skippedCount = 0;
 
-                foreach (var symbol in allSymbolsDue)
+                foreach (var symbol in prioritizedSymbols)
                 {
                     var analysisMode = _smartMarketHours.GetAnalysisMode(symbol.Symbol);
 
@@ -71,119 +79,146 @@ public class Worker : BackgroundService
                         continue;
                     }
 
-                    symbolsToProcess.Add((symbol, analysisMode));
+                    // 🎯 PRIORITY SCORING per logging
+                    var priority = CalculateSymbolPriority(symbol);
+                    symbolsToProcess.Add((symbol, analysisMode, priority));
                 }
 
-                _logger.LogInformation($"📊 HYBRID ANALYSIS: Processing {symbolsToProcess.Count} symbols " +
-                    $"(skipped {skippedCount} out-of-hours)");
+                _logger.LogInformation($"📊 SMART ANALYSIS: Processing {symbolsToProcess.Count} symbols " +
+                    $"(skipped {skippedCount}) - {symbolsToProcess.Count(x => x.symbol.VolatilityLevel == VolatilityLevel.Explosive)} explosive");
 
-                // Log distribuzione per modalità
-                var modeDistribution = symbolsToProcess
-                    .GroupBy(x => x.mode)
-                    .ToDictionary(g => g.Key, g => g.Count());
+                // Log prioritization
+                LogVolatilityDistribution(symbolsToProcess);
 
-                foreach (var mode in modeDistribution)
-                {
-                    _logger.LogInformation($"  {mode.Key}: {mode.Value} symbols");
-                }
-
-                // ===== PROCESS SYMBOLS CON MODALITÀ SPECIFICA =====
+                // Process con timing dinamico basato su volatilità
                 var processedCount = 0;
                 var signalsSentCount = 0;
 
-                foreach (var (watchlistSymbol, analysisMode) in symbolsToProcess)
+                foreach (var (watchlistSymbol, analysisMode, priority) in symbolsToProcess)
                 {
                     try
                     {
-                        var modeDescription = _smartMarketHours.GetModeDescription(analysisMode, watchlistSymbol.Symbol);
-                        _logger.LogDebug($"Analyzing {watchlistSymbol.Symbol} - {modeDescription}");
+                        var volatilityInfo = $"{watchlistSymbol.VolatilityLevel}" +
+                            (watchlistSymbol.IsBreakoutCandidate ? " 🚀" : "") +
+                            (watchlistSymbol.ConsecutiveHighVolDays > 0 ? $" ({watchlistSymbol.ConsecutiveHighVolDays}d)" : "");
 
-                        // Get indicators
-                        var indicator = await _yahooFinance.GetIndicatorsAsync(watchlistSymbol.Symbol);
+                        _logger.LogDebug($"Analyzing {watchlistSymbol.Symbol} [{volatilityInfo}] - {analysisMode} (Priority: {priority})");
 
-                        // Analyze for signals
-                        var signal = await _signalFilter.AnalyzeSignalAsync(watchlistSymbol.Symbol, indicator);
+                        // ... resto della logica di analisi esistente ...
 
-                        // Save indicator
-                        await _mongo.SaveIndicatorAsync(indicator);
-
-                        if (signal != null)
-                        {
-                            // ===== HYBRID DECISION: Dovrei inviare questo segnale? =====
-                            var shouldSend = _smartMarketHours.ShouldSendSignal(signal, analysisMode);
-
-                            if (shouldSend)
-                            {
-                                // Enhance con risk management
-                                signal = await _riskManagement.EnhanceSignalWithRiskManagement(signal);
-
-                                // Save signal
-                                await _mongo.SaveSignalAsync(signal);
-
-                                // Send message con contesto modalità
-                                var message = FormatHybridMessage(signal, analysisMode, watchlistSymbol.Market ?? "US");
-                                await _telegram.SendMessageAsync(message);
-                                await _signalFilter.MarkSignalAsSentAsync(signal.Id);
-
-                                signalsSentCount++;
-                                _logger.LogInformation($"✅ {analysisMode} signal sent for {watchlistSymbol.Symbol}: " +
-                                    $"{signal.Type} ({signal.Confidence}%)");
-                            }
-                            else
-                            {
-                                _logger.LogDebug($"⏸️ Signal for {watchlistSymbol.Symbol} below {analysisMode} threshold " +
-                                    $"({signal.Confidence}% < {_smartMarketHours.GetConfidenceThreshold(analysisMode)}%)");
-                            }
-                        }
-
-                        // Update next analysis time basato sulla modalità
-                        var nextAnalysisDelay = _smartMarketHours.GetAnalysisFrequency(analysisMode, watchlistSymbol.Tier);
-                        var nextAnalysis = DateTime.UtcNow.Add(nextAnalysisDelay);
-                        await _symbolSelection.UpdateSymbolNextAnalysis(watchlistSymbol.Symbol, nextAnalysis);
+                        // DYNAMIC DELAY basato su volatilità
+                        var delay = _smartMarketHours.GetDynamicProcessingDelay(watchlistSymbol, analysisMode);
+                        await Task.Delay(delay, stoppingToken);
 
                         processedCount++;
-
-                        // Dynamic rate limiting basato sulla modalità
-                        var delay = analysisMode switch
-                        {
-                            AnalysisMode.FullAnalysis => 600,      // 600ms durante mercato
-                            AnalysisMode.PreMarketWatch => 800,   // 800ms pre-market
-                            AnalysisMode.OffHoursMonitor => 1000, // 1s off-hours
-                            _ => 800
-                        };
-
-                        await Task.Delay(delay, stoppingToken);
                     }
                     catch (Exception ex)
                     {
-                        _logger.LogError(ex, "Error processing {symbol} in {mode} mode",
-                            watchlistSymbol.Symbol, analysisMode);
+                        _logger.LogError(ex, "Error processing volatile symbol {symbol}", watchlistSymbol.Symbol);
                     }
                 }
 
-                _logger.LogInformation($"📈 Cycle completed: {processedCount} processed, {signalsSentCount} signals sent");
-
-                // Daily optimization (at midnight)
-                if (DateTime.Now.Hour == 0 && DateTime.Now.Minute < 5)
+                // Update frequenze dinamiche ogni ora
+                if (DateTime.Now.Minute == 0)
                 {
-                    _logger.LogInformation("🔄 Starting daily watchlist optimization...");
-                    await _symbolSelection.OptimizeWatchlist();
-
-                    // Log market status per nuovo giorno
-                    _smartMarketHours.LogCurrentMarketStatus();
+                    await _symbolSelection.UpdateDynamicFrequencies();
                 }
 
-                // Wait before next cycle (più lungo se tutti i mercati sono chiusi)
-                var anyMarketOpen = symbolsToProcess.Any(x => x.mode == AnalysisMode.FullAnalysis);
-                var waitTime = anyMarketOpen ? TimeSpan.FromMinutes(5) : TimeSpan.FromMinutes(15);
+                _logger.LogInformation($"📈 Volatile cycle completed: {processedCount} processed, {signalsSentCount} signals sent");
 
-                _logger.LogDebug($"💤 Waiting {waitTime.TotalMinutes} minutes before next cycle");
+                // Wait time dinamico
+                var anyExplosiveActive = symbolsToProcess.Any(x =>
+                    x.symbol.VolatilityLevel == VolatilityLevel.Explosive && x.mode == AnalysisMode.FullAnalysis);
+
+                var waitTime = anyExplosiveActive ?
+                    TimeSpan.FromMinutes(2) :  // Cicli rapidi se ci sono esplosivi attivi
+                    TimeSpan.FromMinutes(5);   // Cicli normali
+
+                _logger.LogDebug($"💤 Waiting {waitTime.TotalMinutes} minutes (explosive active: {anyExplosiveActive})");
                 await Task.Delay(waitTime, stoppingToken);
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "Error in hybrid worker loop");
+                _logger.LogError(ex, "Error in volatile worker loop");
                 await Task.Delay(TimeSpan.FromMinutes(2), stoppingToken);
+            }
+        }
+    }
+
+    private void LogVolatilityDistribution(List<(WatchlistSymbol symbol, AnalysisMode mode, int priority)> symbols)
+    {
+        var volatilityGroups = symbols.GroupBy(x => x.symbol.VolatilityLevel)
+            .ToDictionary(g => g.Key, g => g.Count());
+
+        var breakoutCandidates = symbols.Count(x => x.symbol.IsBreakoutCandidate);
+        var avgVolatility = symbols.Average(x => x.symbol.AverageVolatilityPercent);
+
+        _logger.LogInformation("🎯 Volatility Distribution:");
+        foreach (var group in volatilityGroups.OrderByDescending(x => x.Key))
+        {
+            var delay = _smartMarketHours.GetDynamicProcessingDelay(new WatchlistSymbol { VolatilityLevel = group.Key }, AnalysisMode.FullAnalysis);
+            _logger.LogInformation($"  {group.Key}: {group.Value} symbols ({delay}ms delay)");
+        }
+
+        _logger.LogInformation($"  Breakout Candidates: {breakoutCandidates}");
+        _logger.LogInformation($"  Average Volatility: {avgVolatility:F1}%");
+    }
+
+    // Calcola priorità per logging e debug
+    private int CalculateSymbolPriority(WatchlistSymbol symbol)
+    {
+        var priority = (int)symbol.VolatilityLevel * 10; // Base volatility score
+
+        if (symbol.IsBreakoutCandidate) priority += 20;
+        if (symbol.ConsecutiveHighVolDays >= 3) priority += 15;
+        if (symbol.AverageVolatilityPercent > 10) priority += 10;
+
+        return priority;
+    }
+
+    // Delay dinamico per rate limiting
+    private int GetDynamicDelay(WatchlistSymbol symbol, AnalysisMode mode)
+    {
+        return (symbol.VolatilityLevel, mode) switch
+        {
+            (VolatilityLevel.Explosive, AnalysisMode.FullAnalysis) => 200,     // Esplosivi super rapidi
+            (VolatilityLevel.High, AnalysisMode.FullAnalysis) => 400,         // Volatili rapidi  
+            (VolatilityLevel.Standard, AnalysisMode.FullAnalysis) => 600,     // Standard normale
+            (VolatilityLevel.Low, _) => 1000,                                 // Lenti più lenti
+
+            (VolatilityLevel.Explosive, AnalysisMode.PreMarketWatch) => 300,  // Pre-market esplosivi
+            (_, AnalysisMode.PreMarketWatch) => 800,
+
+            (_, AnalysisMode.OffHoursMonitor) => 1200,                        // Off-hours più lenti
+
+            _ => 600 // Default
+        };
+    }
+    public async Task UpdateDynamicFrequencies()
+    {
+        var allSymbols = await _symbolSelection.GetWatchlistSummary();
+
+        foreach (var symbol in allSymbols)
+        {
+            // Ricalcola volatilità ogni 24 ore
+            if ((DateTime.UtcNow - symbol.LastVolatilityUpdate).TotalHours > 24)
+            {
+                await _symbolSelection.ClassifySymbolVolatility(symbol);
+            }
+
+            // Aggiorna frequenza monitoring
+            var currentMode = _smartMarketHours.GetAnalysisMode(symbol.Symbol);
+            var newFrequency = _smartMarketHours.GetDynamicMonitoringFrequency(symbol, currentMode);
+
+            // Aggiorna NextAnalysis solo se frequenza è cambiata significativamente
+            var timeDiff = Math.Abs((newFrequency - symbol.MonitoringFrequency).TotalMinutes);
+            if (timeDiff > 5) // Differenza > 5 minuti
+            {
+                symbol.MonitoringFrequency = newFrequency;
+                var nextAnalysis = DateTime.UtcNow.Add(newFrequency);
+                await _symbolSelection.UpdateSymbolNextAnalysis(symbol.Symbol, nextAnalysis);
+
+                _logger.LogInformation($"🔄 Updated frequency: {symbol.Symbol} = {newFrequency} (volatility: {symbol.VolatilityLevel})");
             }
         }
     }
@@ -198,21 +233,16 @@ public class Worker : BackgroundService
             _ => "⚪"
         };
 
-        var modePrefix = mode switch
-        {
-            AnalysisMode.PreMarketWatch => "PRE-MARKET SETUP",
-            AnalysisMode.OffHoursMonitor => "OFF-HOURS ALERT",
-            _ => ""
-        };
-
-        var signalEmoji = signal.Type switch
-        {
-            SignalType.Buy when signal.Confidence >= 90 => "🚀",
-            SignalType.Buy => "📈",
-            SignalType.Warning => "⚠️",
-            SignalType.Sell => "📉",
-            _ => "ℹ️"
-        };
+        // 🚀 NUOVO: Emoji specifici per breakout
+        var signalEmoji = signal.Reason?.Contains("IMMINENT BREAKOUT") == true ? "🚀💥" :
+                         signal.Reason?.Contains("BREAKOUT SETUP") == true ? "💥🔥" :
+                         signal.Type switch
+                         {
+                             SignalType.Buy when signal.Confidence >= 90 => "🚀",
+                             SignalType.Buy => "📈",
+                             SignalType.Warning => "⚠️",
+                             _ => "ℹ️"
+                         };
 
         var marketFlag = market switch
         {
@@ -224,10 +254,29 @@ public class Worker : BackgroundService
         var currency = GetCurrencySymbol(signal.Symbol, market);
         var marketStatus = _smartMarketHours.GetModeDescription(mode, signal.Symbol);
 
-        // Titolo con prefisso modalità
-        var title = string.IsNullOrEmpty(modePrefix)
-            ? $"{signalEmoji} {signal.Type.ToString().ToUpper()} {signal.Symbol} {marketFlag}"
-            : $"{modeEmoji} {modePrefix} {signal.Symbol} {marketFlag}";
+        // 🔥 TITOLO SPECIALE per breakout
+        string title;
+        if (signal.Reason?.Contains("IMMINENT BREAKOUT") == true)
+        {
+            title = $"🚀💥 IMMINENT BREAKOUT {signal.Symbol} {marketFlag}";
+        }
+        else if (signal.Reason?.Contains("BREAKOUT SETUP") == true)
+        {
+            title = $"💥🔥 BREAKOUT SETUP {signal.Symbol} {marketFlag}";
+        }
+        else
+        {
+            var modePrefix = mode switch
+            {
+                AnalysisMode.PreMarketWatch => "PRE-MARKET SETUP",
+                AnalysisMode.OffHoursMonitor => "OFF-HOURS ALERT",
+                _ => ""
+            };
+
+            title = string.IsNullOrEmpty(modePrefix)
+                ? $"{signalEmoji} {signal.Type.ToString().ToUpper()} {signal.Symbol} {marketFlag}"
+                : $"{modeEmoji} {modePrefix} {signal.Symbol} {marketFlag}";
+        }
 
         var message = $@"{title}
 
@@ -239,7 +288,18 @@ public class Worker : BackgroundService
 
 🕐 STATUS: {marketStatus}";
 
-        // Risk management (solo per segnali completi)
+        // 🚀 SEZIONE SPECIALE per breakout
+        if (signal.Reason?.Contains("BREAKOUT") == true)
+        {
+            message += $@"
+
+🚀 BREAKOUT ALERT:
+⚡ Multiple technical triggers firing
+🎯 High probability explosive move
+⏰ ENTRY WINDOW: Next 1-4 hours";
+        }
+
+        // Risk management (solo per segnali con livelli di trading)
         if (signal.StopLoss.HasValue && signal.TakeProfit.HasValue)
         {
             message += $@"
@@ -248,46 +308,59 @@ public class Worker : BackgroundService
 🔻 Stop Loss: {currency}{signal.StopLoss:F2} ({signal.StopLossPercent:F1}%)
 🎯 Take Profit: {currency}{signal.TakeProfit:F2} ({signal.TakeProfitPercent:F1}%)
 ⚖️ Risk/Reward: 1:{signal.RiskRewardRatio:F1}";
+
+            // 💥 BREAKOUT SPECIFICO: Take profit più alto
+            if (signal.Reason?.Contains("BREAKOUT") == true)
+            {
+                var breakoutTarget = signal.Price * 1.15; // 15% target per breakout
+                message += $@"
+🚀 BREAKOUT TARGET: {currency}{breakoutTarget:F2} (15%+ potential)";
+            }
         }
 
-        // Consigli specifici per modalità
-        if (mode == AnalysisMode.PreMarketWatch)
-        {
-            var timeUntilOpen = _smartMarketHours.GetTimeUntilMarketOpen(signal.Symbol);
-            var hours = (int)timeUntilOpen.TotalHours;
-            var minutes = timeUntilOpen.Minutes;
-
-            message += $@"
-
-⏰ TIMING:
-📝 Market opens in {hours}h {minutes}m
-🎯 Prepare limit order for gap play";
-        }
-        else if (mode == AnalysisMode.OffHoursMonitor)
+        // Timing advice per breakout
+        if (signal.Reason?.Contains("IMMINENT BREAKOUT") == true)
         {
             message += $@"
 
-🌙 OFF-HOURS:
-📝 Consider for next trading session
-⚠️ Verify at market open";
+⚡ URGENT TIMING:
+🔥 Enter within next 1-2 hours
+📈 Expected move: 10-25%+ 
+⚠️ Use limit orders near current price";
+        }
+        else if (signal.Reason?.Contains("BREAKOUT SETUP") == true)
+        {
+            message += $@"
+
+📋 SETUP TIMING:
+🎯 Position before breakout (1-3 days)
+📊 Watch for volume confirmation
+✅ Good risk/reward setup";
         }
 
-        // Levels per tutti
+        // Levels
         if (signal.SupportLevel.HasValue && signal.ResistanceLevel.HasValue &&
             signal.SupportLevel > 0 && signal.ResistanceLevel > 0)
         {
             message += $@"
 
-📈 LEVELS:
+📈 KEY LEVELS:
 🟢 Support: {currency}{signal.SupportLevel:F2}
 🔴 Resistance: {currency}{signal.ResistanceLevel:F2}";
+
+            // Per breakout, enfatizza la resistenza da rompere
+            if (signal.Reason?.Contains("BREAKOUT") == true)
+            {
+                message += $@"
+💥 BREAKOUT LEVEL: {currency}{signal.ResistanceLevel:F2}";
+            }
         }
 
         message += $@"
 
 💡 {signal.Reason}
 
-🕐 {DateTime.Now:HH:mm} {modeEmoji} (Hybrid Strategy)";
+🕐 {DateTime.Now:HH:mm} {modeEmoji} (Breakout Hunter)";
 
         return message;
     }

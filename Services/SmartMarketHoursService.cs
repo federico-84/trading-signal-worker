@@ -18,6 +18,65 @@ namespace PortfolioSignalWorker.Services
             Skip               // Non analizzare (troppo lontano dall'apertura)
         }
 
+        public TimeSpan GetDynamicMonitoringFrequency(WatchlistSymbol symbol, AnalysisMode mode)
+        {
+            var baseFrequency = mode switch
+            {
+                AnalysisMode.FullAnalysis => symbol.VolatilityLevel switch
+                {
+                    VolatilityLevel.Explosive => TimeSpan.FromMinutes(5),   // 🚀 Esplosivi ogni 5 min!
+                    VolatilityLevel.High => TimeSpan.FromMinutes(15),       // 📈 Volatili ogni 15 min
+                    VolatilityLevel.Standard => TimeSpan.FromMinutes(30),   // 📊 Standard ogni 30 min
+                    VolatilityLevel.Low => TimeSpan.FromHours(2),           // 😴 Lenti ogni 2 ore
+                    _ => TimeSpan.FromMinutes(30)
+                },
+
+                AnalysisMode.PreMarketWatch => symbol.VolatilityLevel switch
+                {
+                    VolatilityLevel.Explosive => TimeSpan.FromMinutes(10),  // Pre-market esplosivi
+                    VolatilityLevel.High => TimeSpan.FromMinutes(30),
+                    _ => TimeSpan.FromHours(1)
+                },
+
+                AnalysisMode.OffHoursMonitor => symbol.VolatilityLevel switch
+                {
+                    VolatilityLevel.Explosive => TimeSpan.FromHours(2),     // Anche off-hours per esplosivi
+                    VolatilityLevel.High => TimeSpan.FromHours(4),
+                    _ => TimeSpan.FromHours(8)
+                },
+
+                _ => TimeSpan.FromHours(4)
+            };
+
+            // 🔥 BOOST per breakout candidates
+            if (symbol.IsBreakoutCandidate)
+            {
+                baseFrequency = TimeSpan.FromTicks(baseFrequency.Ticks / 2); // 2x più frequente
+                _logger.LogDebug($"🚀 BREAKOUT CANDIDATE boost: {symbol.Symbol} frequency = {baseFrequency}");
+            }
+
+            return baseFrequency;
+        }
+
+        // Metodo helper per ottenere il delay dinamico (dal Worker)
+        public int GetDynamicProcessingDelay(WatchlistSymbol symbol, AnalysisMode mode)
+        {
+            return (symbol.VolatilityLevel, mode) switch
+            {
+                (VolatilityLevel.Explosive, AnalysisMode.FullAnalysis) => 200,     // Esplosivi super rapidi
+                (VolatilityLevel.High, AnalysisMode.FullAnalysis) => 400,         // Volatili rapidi  
+                (VolatilityLevel.Standard, AnalysisMode.FullAnalysis) => 600,     // Standard normale
+                (VolatilityLevel.Low, _) => 1000,                                 // Lenti più lenti
+
+                (VolatilityLevel.Explosive, AnalysisMode.PreMarketWatch) => 300,  // Pre-market esplosivi
+                (_, AnalysisMode.PreMarketWatch) => 800,
+
+                (_, AnalysisMode.OffHoursMonitor) => 1200,                        // Off-hours più lenti
+
+                _ => 600 // Default
+            };
+        }
+
         public AnalysisMode GetAnalysisMode(string symbol)
         {
             var utcNow = DateTime.UtcNow;

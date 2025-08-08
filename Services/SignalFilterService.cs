@@ -177,21 +177,22 @@ namespace PortfolioSignalWorker.Services
 
             return current;
         }
+        // Nel SignalFilterService.cs - sostituisci il metodo GenerateFilteredSignalAsync
 
         private async Task<TradingSignal?> GenerateFilteredSignalAsync(
-     string symbol,
-     StockIndicator enhanced,
-     List<StockIndicator> historical)
+            string symbol,
+            StockIndicator enhanced,
+            List<StockIndicator> historical)
         {
-            // FILTRO 1: Evita segnali duplicati recenti (ultimi 2 ore)
+            // FILTRO 1: Anti-spam (ridotto a 2 ore per breakout)
             if (await HasRecentSignalAsync(symbol, TimeSpan.FromHours(2)))
             {
                 _logger.LogDebug($"Segnale recente già inviato per {symbol}");
                 return null;
             }
 
-            // FILTRO 2: STRONG BUY - Tutti gli indicatori allineati
-            if (IsStrongBuySignal(enhanced, historical.Count))
+            // 🚀 NUOVO FILTRO 0: IMMINENT BREAKOUT - Sta per esplodere (massima priorità)
+            if (IsImminentBreakout(enhanced, historical))
             {
                 var confidence = CalculateConfidence(historical.Count, 95);
                 return new TradingSignal
@@ -199,17 +200,55 @@ namespace PortfolioSignalWorker.Services
                     Symbol = symbol,
                     Type = SignalType.Buy,
                     Confidence = confidence,
-                    Reason = $"STRONG BUY: RSI oversold confermato + MACD cross + Volume ({historical.Count} periods)",
+                    Reason = $"🚀 IMMINENT BREAKOUT: {GetBreakoutTriggers(enhanced, historical)} ({historical.Count} periods)",
                     RSI = enhanced.RSI,
                     MACD_Histogram = enhanced.MACD_Histogram,
                     Price = enhanced.Price,
                     Volume = enhanced.Volume,
-                    SignalHash = GenerateSignalHash(symbol, "STRONG_BUY", enhanced.RSI)
+                    SignalHash = GenerateSignalHash(symbol, "IMMINENT_BREAKOUT", enhanced.Price)
                 };
             }
 
-            // FILTRO 3: MEDIUM BUY - Confluence di 2 indicatori
-            if (IsMediumBuySignal(enhanced, historical.Count))
+            // 🔥 NUOVO FILTRO 1: BREAKOUT SETUP - Consolidamento pre-esplosione
+            if (IsBreakoutSetup(enhanced, historical))
+            {
+                var confidence = CalculateConfidence(historical.Count, 85);
+                return new TradingSignal
+                {
+                    Symbol = symbol,
+                    Type = SignalType.Buy,
+                    Confidence = confidence,
+                    Reason = $"💥 BREAKOUT SETUP: {GetSetupTriggers(enhanced, historical)} ({historical.Count} periods)",
+                    RSI = enhanced.RSI,
+                    MACD_Histogram = enhanced.MACD_Histogram,
+                    Price = enhanced.Price,
+                    Volume = enhanced.Volume,
+                    SignalHash = GenerateSignalHash(symbol, "BREAKOUT_SETUP", enhanced.Price)
+                };
+            }
+
+            // 🔥 NUOVO APPROCCIO: Solo setup di BUY in formazione
+
+            // FILTRO 2: PERFECT BUY SETUP - Tutti i criteri perfetti
+            if (IsPerfectBuySetup(enhanced, historical))
+            {
+                var confidence = CalculateConfidence(historical.Count, 90);
+                return new TradingSignal
+                {
+                    Symbol = symbol,
+                    Type = SignalType.Buy,
+                    Confidence = confidence,
+                    Reason = $"PERFECT SETUP: RSI oversold + MACD convergenza + Volume forte ({historical.Count} periods)",
+                    RSI = enhanced.RSI,
+                    MACD_Histogram = enhanced.MACD_Histogram,
+                    Price = enhanced.Price,
+                    Volume = enhanced.Volume,
+                    SignalHash = GenerateSignalHash(symbol, "PERFECT_BUY", enhanced.RSI)
+                };
+            }
+
+            // FILTRO 3: GOOD BUY SETUP - Criteri buoni (2 su 3)
+            if (IsGoodBuySetup(enhanced, historical))
             {
                 var confidence = CalculateConfidence(historical.Count, 75);
                 return new TradingSignal
@@ -217,71 +256,409 @@ namespace PortfolioSignalWorker.Services
                     Symbol = symbol,
                     Type = SignalType.Buy,
                     Confidence = confidence,
-                    Reason = $"BUY: RSI oversold + MACD cross ({historical.Count} periods)",
+                    Reason = $"GOOD SETUP: RSI < 30 + {GetSetupReason(enhanced, historical)} ({historical.Count} periods)",
                     RSI = enhanced.RSI,
                     MACD_Histogram = enhanced.MACD_Histogram,
                     Price = enhanced.Price,
                     Volume = enhanced.Volume,
-                    SignalHash = GenerateSignalHash(symbol, "MEDIUM_BUY", enhanced.RSI)
+                    SignalHash = GenerateSignalHash(symbol, "GOOD_BUY", enhanced.RSI)
                 };
             }
 
-            // 🔥 FILTRO 4: WARNING - RSI estremo (CORREZIONE: reso meno restrittivo)
-            if (IsWarningSignal(enhanced, historical))
+            // FILTRO 4: EARLY SETUP WARNING - Sta sviluppando un setup (1 su 3 + RSI in discesa)
+            if (IsEarlySetupWarning(enhanced, historical))
             {
                 var confidence = CalculateConfidence(historical.Count, 60);
-
-                // 🔥 NUOVO: Aggiungi dettagli sul perché è stato generato
-                var warningReason = enhanced.RSI < 20 ? "RSI estremamente oversold" :
-                                   enhanced.RSI < 25 ? "RSI molto oversold" :
-                                   enhanced.RSI < 30 ? "RSI oversold" :
-                                   enhanced.RSI > 75 ? "RSI molto overbought" :
-                                   "RSI overbought";
-
-                _logger.LogInformation($"🔥 WARNING signal generated for {symbol}: {warningReason} (RSI: {enhanced.RSI:F1})");
-
                 return new TradingSignal
                 {
                     Symbol = symbol,
                     Type = SignalType.Warning,
                     Confidence = confidence,
-                    Reason = $"WARNING: {warningReason} ({historical.Count} periods)",
+                    Reason = $"EARLY SETUP: RSI in discesa verso 30 + {GetEarlySetupReason(enhanced, historical)} ({historical.Count} periods)",
                     RSI = enhanced.RSI,
                     MACD_Histogram = enhanced.MACD_Histogram,
                     Price = enhanced.Price,
                     Volume = enhanced.Volume,
-                    SignalHash = GenerateSignalHash(symbol, "WARNING", enhanced.RSI)
+                    SignalHash = GenerateSignalHash(symbol, "EARLY_SETUP", enhanced.RSI)
                 };
             }
 
-            // 🔥 NUOVO: EXTREME WARNING per RSI sotto 20 o sopra 80 (sempre genera segnale)
-            if (enhanced.RSI < 20 || enhanced.RSI > 80)
-            {
-                var confidence = CalculateConfidence(historical.Count, 50);
-                var extremeReason = enhanced.RSI < 20 ? "RSI EXTREMELY OVERSOLD" : "RSI EXTREMELY OVERBOUGHT";
+            // 🔥 DEBUG: Log quando non viene generato alcun segnale con i nuovi criteri
+            _logger.LogDebug($"❌ No setup for {symbol}: RSI={enhanced.RSI:F1} (<30?), MACD={enhanced.MACD_Histogram:F3} (~0?), VolumeGrowing={IsVolumeGrowing(enhanced, historical)}");
 
-                _logger.LogInformation($"🚨 EXTREME WARNING for {symbol}: {extremeReason} (RSI: {enhanced.RSI:F1})");
-
-                return new TradingSignal
-                {
-                    Symbol = symbol,
-                    Type = SignalType.Warning,
-                    Confidence = confidence,
-                    Reason = $"EXTREME: {extremeReason} ({historical.Count} periods)",
-                    RSI = enhanced.RSI,
-                    MACD_Histogram = enhanced.MACD_Histogram,
-                    Price = enhanced.Price,
-                    Volume = enhanced.Volume,
-                    SignalHash = GenerateSignalHash(symbol, "EXTREME_WARNING", enhanced.RSI)
-                };
-            }
-
-            // 🔥 DEBUG: Log quando non viene generato alcun segnale
-            _logger.LogDebug($"❌ No signal for {symbol}: RSI={enhanced.RSI:F1}, MACD_Cross={enhanced.MACD_Histogram_CrossUp}, MACD_Confirmed={enhanced.MACD_Confirmed}");
-
-            return null; // Nessun segnale valido
+            return null;
         }
 
+        // 🔥 NUOVO: Setup perfetto (tutti i criteri)
+        private bool IsPerfectBuySetup(StockIndicator enhanced, List<StockIndicator> historical)
+        {
+            var rsiOversold = enhanced.RSI < 30;
+            var macdNearZero = IsMACD_NearZero(enhanced, historical);
+            var volumeGrowing = IsVolumeGrowing(enhanced, historical);
+
+            var result = rsiOversold && macdNearZero && volumeGrowing;
+
+            if (result)
+            {
+                _logger.LogInformation($"🎯 PERFECT BUY SETUP: {enhanced.Symbol} - RSI:{enhanced.RSI:F1}, MACD:{enhanced.MACD_Histogram:F3}, Volume crescente");
+            }
+
+            return result;
+        }
+
+        // 🔥 NUOVO: Setup buono (2 criteri su 3, ma RSI sempre < 30)
+        private bool IsGoodBuySetup(StockIndicator enhanced, List<StockIndicator> historical)
+        {
+            if (enhanced.RSI >= 30) return false; // RSI sempre obbligatorio
+
+            var macdNearZero = IsMACD_NearZero(enhanced, historical);
+            var volumeGrowing = IsVolumeGrowing(enhanced, historical);
+
+            var criteriaCount = (macdNearZero ? 1 : 0) + (volumeGrowing ? 1 : 0);
+            var result = criteriaCount >= 1; // RSI + almeno 1 altro criterio
+
+            if (result)
+            {
+                _logger.LogInformation($"📈 GOOD BUY SETUP: {enhanced.Symbol} - RSI:{enhanced.RSI:F1} + {criteriaCount} altri criteri");
+            }
+
+            return result;
+        }
+
+        // 🔥 NUOVO: Early warning (RSI si avvicina a 30)
+        private bool IsEarlySetupWarning(StockIndicator enhanced, List<StockIndicator> historical)
+        {
+            // RSI tra 30-40 ma in discesa verso 30
+            var rsiApproaching = enhanced.RSI > 30 && enhanced.RSI < 40;
+            var rsiDescending = IsRSI_Descending(enhanced, historical);
+
+            if (!rsiApproaching || !rsiDescending) return false;
+
+            // Almeno un altro criterio che si sta sviluppando
+            var macdImproving = IsMACD_Improving(enhanced, historical);
+            var volumeIncreasing = IsVolumeIncreasing(enhanced, historical);
+
+            var result = macdImproving || volumeIncreasing;
+
+            if (result)
+            {
+                _logger.LogInformation($"⚠️ EARLY SETUP: {enhanced.Symbol} - RSI:{enhanced.RSI:F1} scende verso 30");
+            }
+
+            return result;
+        }
+
+        // 🔥 CRITERIO 1: MACD vicino allo zero (histogram tra -0.1 e +0.1)
+        private bool IsMACD_NearZero(StockIndicator enhanced, List<StockIndicator> historical)
+        {
+            var nearZero = Math.Abs(enhanced.MACD_Histogram) <= 0.1;
+
+            // Bonus: MACD sta migliorando (diventando meno negativo o positivo)
+            if (historical.Count >= 2)
+            {
+                var prevMACD = historical.Take(2).Skip(1).FirstOrDefault()?.MACD_Histogram ?? enhanced.MACD_Histogram;
+                var improving = enhanced.MACD_Histogram > prevMACD; // Sta migliorando
+                return nearZero && improving;
+            }
+
+            return nearZero;
+        }
+
+        // 🔥 CRITERIO 2: Volume in crescita (ultimi 3 periodi)
+        private bool IsVolumeGrowing(StockIndicator enhanced, List<StockIndicator> historical)
+        {
+            if (historical.Count < 3) return enhanced.Volume > 1000000; // Fallback per poco storico
+
+            var recent3Volumes = historical.Take(3).Select(x => x.Volume).ToList();
+            var avgRecentVolume = recent3Volumes.Average();
+
+            // Volume attuale > media degli ultimi 3 giorni * 1.2 (20% più alto)
+            var volumeGrowing = enhanced.Volume > avgRecentVolume * 1.2;
+
+            // Bonus: trend crescente negli ultimi 3 periodi
+            if (recent3Volumes.Count == 3)
+            {
+                var trendGrowing = recent3Volumes[0] > recent3Volumes[1] && recent3Volumes[1] >= recent3Volumes[2];
+                return volumeGrowing || trendGrowing;
+            }
+
+            return volumeGrowing;
+        }
+
+        // 🔥 HELPER: RSI in discesa
+        private bool IsRSI_Descending(StockIndicator enhanced, List<StockIndicator> historical)
+        {
+            if (historical.Count < 2) return false;
+
+            var recent2RSI = historical.Take(2).Select(x => x.RSI).ToList();
+            return enhanced.RSI < recent2RSI[0] && recent2RSI[0] <= recent2RSI[1];
+        }
+
+        // 🔥 HELPER: MACD in miglioramento
+        private bool IsMACD_Improving(StockIndicator enhanced, List<StockIndicator> historical)
+        {
+            if (historical.Count < 2) return false;
+
+            var prevMACD = historical.First().MACD_Histogram;
+            return enhanced.MACD_Histogram > prevMACD; // Meno negativo o più positivo
+        }
+
+        // 🔥 HELPER: Volume in aumento
+        private bool IsVolumeIncreasing(StockIndicator enhanced, List<StockIndicator> historical)
+        {
+            if (historical.Count < 1) return false;
+
+            var prevVolume = historical.First().Volume;
+            return enhanced.Volume > prevVolume * 1.1; // 10% più alto del periodo precedente
+        }
+
+        // 🔥 HELPER: Descrizioni per i motivi
+        private string GetSetupReason(StockIndicator enhanced, List<StockIndicator> historical)
+        {
+            var reasons = new List<string>();
+
+            if (IsMACD_NearZero(enhanced, historical))
+                reasons.Add("MACD vicino a zero");
+
+            if (IsVolumeGrowing(enhanced, historical))
+                reasons.Add("Volume crescente");
+
+            return string.Join(" + ", reasons);
+        }
+
+        private string GetEarlySetupReason(StockIndicator enhanced, List<StockIndicator> historical)
+        {
+            var reasons = new List<string>();
+
+            if (IsMACD_Improving(enhanced, historical))
+                reasons.Add("MACD migliora");
+
+            if (IsVolumeIncreasing(enhanced, historical))
+                reasons.Add("Volume aumenta");
+
+            return string.Join(" + ", reasons);
+        }
+        // 🚀 IMMINENT BREAKOUT: Tutti i segnali di esplosione imminente
+        private bool IsImminentBreakout(StockIndicator enhanced, List<StockIndicator> historical)
+        {
+            if (historical.Count < 5) return false; // Serve storico per pattern
+
+            // 1. VOLUME SPIKE ESPLOSIVO (3x la media)
+            var volumeExplosive = IsVolumeExplosive(enhanced, historical);
+
+            // 2. PRICE COMPRESSION seguito da espansione
+            var priceCompression = IsPriceCompressing(enhanced, historical) && IsPriceExpanding(enhanced, historical);
+
+            // 3. MACD GOLDEN CROSS (da negativo a positivo)
+            var macdGoldenCross = IsMACD_GoldenCross(enhanced, historical);
+
+            // 4. RSI MOMENTUM (da oversold verso 50+)
+            var rsiMomentum = IsRSI_MomentumBuilding(enhanced, historical);
+
+            // Serve almeno 2 su 4 segnali forti
+            var signals = new[] { volumeExplosive, priceCompression, macdGoldenCross, rsiMomentum };
+            var activeSignals = signals.Count(x => x);
+
+            var result = activeSignals >= 2;
+
+            if (result)
+            {
+                _logger.LogWarning($"🚀🚀 IMMINENT BREAKOUT DETECTED: {enhanced.Symbol} - {activeSignals}/4 signals active!");
+            }
+
+            return result;
+        }
+
+        // 💥 BREAKOUT SETUP: Consolidamento e preparazione
+        private bool IsBreakoutSetup(StockIndicator enhanced, List<StockIndicator> historical)
+        {
+            if (historical.Count < 10) return false;
+
+            // 1. TIGHT CONSOLIDATION (range stretto negli ultimi giorni)
+            var tightConsolidation = IsTightConsolidation(enhanced, historical, 5);
+
+            // 2. VOLUME BUILDING (volume gradualmente crescente)
+            var volumeBuilding = IsVolumeBuilding(enhanced, historical, 5);
+
+            // 3. TECHNICAL SETUP (RSI recovering, MACD improving)
+            var technicalSetup = IsTechnicalSetupForming(enhanced, historical);
+
+            // 4. ABOVE KEY SUPPORT (prezzo sopra supporto importante)
+            var aboveSupport = IsPriceAboveKeySupport(enhanced, historical);
+
+            // Serve almeno 3 su 4 per setup valido
+            var signals = new[] { tightConsolidation, volumeBuilding, technicalSetup, aboveSupport };
+            var activeSignals = signals.Count(x => x);
+
+            var result = activeSignals >= 3;
+
+            if (result)
+            {
+                _logger.LogInformation($"💥 BREAKOUT SETUP: {enhanced.Symbol} - {activeSignals}/4 setup criteria met");
+            }
+
+            return result;
+        }
+
+        // === DETECTION METHODS ===
+
+        // 🔥 VOLUME ESPLOSIVO (3x media)
+        private bool IsVolumeExplosive(StockIndicator enhanced, List<StockIndicator> historical)
+        {
+            if (historical.Count < 5) return enhanced.Volume > 10_000_000;
+
+            var avgVolume = historical.Take(10).Average(x => x.Volume);
+            var isExplosive = enhanced.Volume > avgVolume * 3.0; // 3x la media
+
+            if (isExplosive)
+            {
+                _logger.LogWarning($"📈📈 VOLUME EXPLOSIVE: {enhanced.Symbol} - {enhanced.Volume:N0} vs avg {avgVolume:N0} (3x+)");
+            }
+
+            return isExplosive;
+        }
+
+        // 📊 PRICE COMPRESSION (range ristretto)
+        private bool IsPriceCompressing(StockIndicator enhanced, List<StockIndicator> historical, int periods = 5)
+        {
+            if (historical.Count < periods) return false;
+
+            var recentPrices = historical.Take(periods).Select(x => x.Price).ToList();
+            recentPrices.Insert(0, enhanced.Price);
+
+            var highPrice = recentPrices.Max();
+            var lowPrice = recentPrices.Min();
+            var priceRange = ((highPrice - lowPrice) / lowPrice) * 100;
+
+            // Range < 5% negli ultimi 5 giorni = consolidamento stretto
+            return priceRange < 5.0;
+        }
+
+        // 📈 PRICE EXPANSION (breakout dal range)
+        private bool IsPriceExpanding(StockIndicator enhanced, List<StockIndicator> historical)
+        {
+            if (historical.Count < 2) return false;
+
+            var yesterdayPrice = historical.First().Price;
+            var todayMove = Math.Abs((enhanced.Price - yesterdayPrice) / yesterdayPrice) * 100;
+
+            // Movimento > 2% oggi = possibile inizio breakout
+            return todayMove > 2.0;
+        }
+
+        // ⚡ MACD GOLDEN CROSS
+        private bool IsMACD_GoldenCross(StockIndicator enhanced, List<StockIndicator> historical)
+        {
+            if (historical.Count < 3) return false;
+
+            var today = enhanced.MACD_Histogram;
+            var yesterday = historical.First().MACD_Histogram;
+            var dayBefore = historical.Skip(1).First().MACD_Histogram;
+
+            // Cross da negativo a positivo negli ultimi 2 giorni
+            var goldenCross = (dayBefore < 0 && yesterday <= 0 && today > 0) ||
+                             (yesterday < 0 && today > 0);
+
+            if (goldenCross)
+            {
+                _logger.LogWarning($"⚡ MACD GOLDEN CROSS: {enhanced.Symbol} - {dayBefore:F3} → {yesterday:F3} → {today:F3}");
+            }
+
+            return goldenCross;
+        }
+
+        // 💪 RSI MOMENTUM BUILDING
+        private bool IsRSI_MomentumBuilding(StockIndicator enhanced, List<StockIndicator> historical)
+        {
+            if (historical.Count < 3) return false;
+
+            var rsiToday = enhanced.RSI;
+            var rsiYesterday = historical.First().RSI;
+            var rsiDayBefore = historical.Skip(1).First().RSI;
+
+            // RSI in crescita da zona oversold verso zona neutra
+            var momentumBuilding = rsiDayBefore < 40 && rsiYesterday < 50 && rsiToday > rsiYesterday &&
+                                  (rsiToday - rsiDayBefore) > 5; // Guadagno di almeno 5 punti
+
+            if (momentumBuilding)
+            {
+                _logger.LogInformation($"💪 RSI MOMENTUM: {enhanced.Symbol} - {rsiDayBefore:F1} → {rsiYesterday:F1} → {rsiToday:F1}");
+            }
+
+            return momentumBuilding;
+        }
+
+        // 📦 TIGHT CONSOLIDATION
+        private bool IsTightConsolidation(StockIndicator enhanced, List<StockIndicator> historical, int periods)
+        {
+            if (historical.Count < periods) return false;
+
+            var recentPrices = historical.Take(periods).Select(x => x.Price).ToList();
+            var avgPrice = recentPrices.Average();
+            var volatility = recentPrices.Select(p => Math.Abs((p - avgPrice) / avgPrice)).Average() * 100;
+
+            // Volatilità media < 3% = consolidamento stretto
+            return volatility < 3.0;
+        }
+
+        // 📈 VOLUME BUILDING (crescita graduale)
+        private bool IsVolumeBuilding(StockIndicator enhanced, List<StockIndicator> historical, int periods)
+        {
+            if (historical.Count < periods) return false;
+
+            var recentVolumes = historical.Take(periods).Select(x => x.Volume).ToList();
+            var olderAvg = recentVolumes.Skip(periods / 2).Average();
+            var recentAvg = recentVolumes.Take(periods / 2).Average();
+
+            // Volume recente > volume più vecchio * 1.3
+            return recentAvg > olderAvg * 1.3;
+        }
+
+        // 🔧 TECHNICAL SETUP FORMING
+        private bool IsTechnicalSetupForming(StockIndicator enhanced, List<StockIndicator> historical)
+        {
+            var rsiRecovering = enhanced.RSI > 30 && enhanced.RSI < 60; // Zona di recovery
+            var macdImproving = IsMACD_Improving(enhanced, historical);
+
+            return rsiRecovering && macdImproving;
+        }
+
+        // 🏗️ PRICE ABOVE KEY SUPPORT
+        private bool IsPriceAboveKeySupport(StockIndicator enhanced, List<StockIndicator> historical)
+        {
+            if (historical.Count < 10) return true; // Default per poco storico
+
+            var recent10Lows = historical.Take(10).Select(x => x.Price * 0.98).ToList(); // Approssimazione support
+            var keySupport = recent10Lows.Max(); // Support più alto (più significativo)
+
+            return enhanced.Price > keySupport;
+        }
+
+        // === HELPER METHODS ===
+
+        private string GetBreakoutTriggers(StockIndicator enhanced, List<StockIndicator> historical)
+        {
+            var triggers = new List<string>();
+
+            if (IsVolumeExplosive(enhanced, historical)) triggers.Add("Volume 3x+");
+            if (IsPriceCompressing(enhanced, historical) && IsPriceExpanding(enhanced, historical)) triggers.Add("Price breakout");
+            if (IsMACD_GoldenCross(enhanced, historical)) triggers.Add("MACD golden cross");
+            if (IsRSI_MomentumBuilding(enhanced, historical)) triggers.Add("RSI momentum");
+
+            return string.Join(" + ", triggers);
+        }
+
+        private string GetSetupTriggers(StockIndicator enhanced, List<StockIndicator> historical)
+        {
+            var triggers = new List<string>();
+
+            if (IsTightConsolidation(enhanced, historical, 5)) triggers.Add("Tight consolidation");
+            if (IsVolumeBuilding(enhanced, historical, 5)) triggers.Add("Volume building");
+            if (IsTechnicalSetupForming(enhanced, historical)) triggers.Add("Technical setup");
+            if (IsPriceAboveKeySupport(enhanced, historical)) triggers.Add("Above support");
+
+            return string.Join(" + ", triggers);
+        }
         // NUOVO: Calcola confidence basata sui dati storici disponibili
         private int CalculateConfidence(int historicalCount, int baseConfidence)
         {
@@ -290,75 +667,7 @@ namespace PortfolioSignalWorker.Services
             if (historicalCount >= 5) return baseConfidence - 20;    // -20%
             if (historicalCount >= 2) return baseConfidence - 30;    // -30%
             return baseConfidence - 40;                               // -40% per 0-1 record
-        }
-
-        private bool IsStrongBuySignal(StockIndicator enhanced, int historicalCount)
-        {
-            var baseCondition = enhanced.RSI < 30 && enhanced.MACD_Confirmed;
-
-            bool result;
-            if (historicalCount >= 10)
-            {
-                result = baseCondition && enhanced.RSI_Confirmed && enhanced.VolumeSpike && enhanced.RSI_SMA_5 < 35;
-            }
-            else
-            {
-                result = baseCondition && enhanced.RSI_Confirmed;
-            }
-
-            if (result)
-            {
-                _logger.LogInformation($"🚀 STRONG BUY criteria met for {enhanced.Symbol}: RSI={enhanced.RSI:F1}, MACD_Confirmed={enhanced.MACD_Confirmed}, RSI_Confirmed={enhanced.RSI_Confirmed}");
-            }
-            else
-            {
-                _logger.LogDebug($"❌ Strong buy failed for {enhanced.Symbol}: RSI={enhanced.RSI:F1} (<30?), MACD_Confirmed={enhanced.MACD_Confirmed}, RSI_Confirmed={enhanced.RSI_Confirmed}");
-            }
-
-            return result;
-        }
-
-        private bool IsMediumBuySignal(StockIndicator enhanced, int historicalCount)
-        {
-            var result = enhanced.RSI < 30 && enhanced.RSI_Confirmed && enhanced.MACD_Histogram_CrossUp;
-
-            if (result)
-            {
-                _logger.LogInformation($"📈 MEDIUM BUY criteria met for {enhanced.Symbol}: RSI={enhanced.RSI:F1}, RSI_Confirmed={enhanced.RSI_Confirmed}, MACD_CrossUp={enhanced.MACD_Histogram_CrossUp}");
-            }
-            else
-            {
-                _logger.LogDebug($"❌ Medium buy failed for {enhanced.Symbol}: RSI={enhanced.RSI:F1} (<30?), RSI_Confirmed={enhanced.RSI_Confirmed}, MACD_CrossUp={enhanced.MACD_Histogram_CrossUp}");
-            }
-
-            return result;
-        }
-
-        private bool IsWarningSignal(StockIndicator enhanced, List<StockIndicator> historical)
-        {
-            // RSI estremo (ampliato il range)
-            var isExtremeCondition = enhanced.RSI < 30 || enhanced.RSI > 70; // Era < 25 e > 75
-
-            // Volume significativo (reso meno restrittivo)
-            var hasSignificantVolume = enhanced.Volume > 100000 || enhanced.VolumeSpike;
-
-            // Trend negativo persistente (reso opzionale)
-            bool trendingDown = false;
-            if (historical.Count >= 2)
-            {
-                trendingDown = historical.Take(2).All(x => x.RSI < enhanced.RSI + 10); // Era +5
-            }
-
-            // 🔥 NUOVO: Genera warning se RSI è estremo, indipendentemente da altri fattori
-            var shouldGenerate = isExtremeCondition && (hasSignificantVolume || enhanced.RSI < 25 || enhanced.RSI > 75);
-
-            if (shouldGenerate)
-            {
-                _logger.LogDebug($"✅ Warning criteria met for {enhanced.Symbol}: RSI={enhanced.RSI:F1}, Volume={enhanced.Volume}, VolumeSpike={enhanced.VolumeSpike}");
-            }
-
-            return shouldGenerate;
-        }
+        } 
 
         private async Task<bool> HasRecentSignalAsync(string symbol, TimeSpan timeWindow)
         {

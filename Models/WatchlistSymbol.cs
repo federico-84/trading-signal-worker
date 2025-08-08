@@ -47,8 +47,21 @@ namespace PortfolioSignalWorker.Models
         public DateTime AddedDate { get; set; } = DateTime.UtcNow;
         public DateTime LastUpdated { get; set; } = DateTime.UtcNow;
         public string Notes { get; set; } = "";
-    }
 
+        // 🚀 NUOVI CAMPI per volatilità dinamica
+        public VolatilityLevel VolatilityLevel { get; set; } = VolatilityLevel.Standard;
+        public double AverageVolatilityPercent { get; set; } = 0.0; // Media volatilità giornaliera
+        public DateTime LastVolatilityUpdate { get; set; } = DateTime.UtcNow;
+        public int ConsecutiveHighVolDays { get; set; } = 0; // Giorni consecutivi alta volatilità
+        public bool IsBreakoutCandidate { get; set; } = false; // Flag per candidati breakout
+    }
+    public enum VolatilityLevel
+    {
+        Low = 1,        // <2% movimento giornaliero medio (KO, PG, WMT)
+        Standard = 2,   // 2-5% movimento giornaliero (AAPL, MSFT)
+        High = 3,       // 5-10% movimento giornaliero (TSLA, NVDA)  
+        Explosive = 4   // >10% movimento giornaliero (SHOP, COIN, meme stocks)
+    }
     public enum SymbolTier
     {
         Tier1_Priority = 1,    // Every 30 min - Top performers
