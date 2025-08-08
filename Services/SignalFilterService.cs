@@ -179,9 +179,9 @@ namespace PortfolioSignalWorker.Services
         }
 
         private async Task<TradingSignal?> GenerateFilteredSignalAsync(
-            string symbol,
-            StockIndicator enhanced,
-            List<StockIndicator> historical)
+     string symbol,
+     StockIndicator enhanced,
+     List<StockIndicator> historical)
         {
             // FILTRO 1: Evita segnali duplicati recenti (ultimi 2 ore)
             if (await HasRecentSignalAsync(symbol, TimeSpan.FromHours(2)))
@@ -190,7 +190,7 @@ namespace PortfolioSignalWorker.Services
                 return null;
             }
 
-            // FILTRO 2: STRONG BUY - Tutti gli indicatori allineati (ma adattato per poco storico)
+            // FILTRO 2: STRONG BUY - Tutti gli indicatori allineati
             if (IsStrongBuySignal(enhanced, historical.Count))
             {
                 var confidence = CalculateConfidence(historical.Count, 95);
@@ -226,16 +226,26 @@ namespace PortfolioSignalWorker.Services
                 };
             }
 
-            // FILTRO 4: WARNING - RSI estremo ma altri indicatori deboli
+            // 🔥 FILTRO 4: WARNING - RSI estremo (CORREZIONE: reso meno restrittivo)
             if (IsWarningSignal(enhanced, historical))
             {
                 var confidence = CalculateConfidence(historical.Count, 60);
+
+                // 🔥 NUOVO: Aggiungi dettagli sul perché è stato generato
+                var warningReason = enhanced.RSI < 20 ? "RSI estremamente oversold" :
+                                   enhanced.RSI < 25 ? "RSI molto oversold" :
+                                   enhanced.RSI < 30 ? "RSI oversold" :
+                                   enhanced.RSI > 75 ? "RSI molto overbought" :
+                                   "RSI overbought";
+
+                _logger.LogInformation($"🔥 WARNING signal generated for {symbol}: {warningReason} (RSI: {enhanced.RSI:F1})");
+
                 return new TradingSignal
                 {
                     Symbol = symbol,
                     Type = SignalType.Warning,
                     Confidence = confidence,
-                    Reason = $"WARNING: RSI molto oversold ({historical.Count} periods)",
+                    Reason = $"WARNING: {warningReason} ({historical.Count} periods)",
                     RSI = enhanced.RSI,
                     MACD_Histogram = enhanced.MACD_Histogram,
                     Price = enhanced.Price,
@@ -243,6 +253,31 @@ namespace PortfolioSignalWorker.Services
                     SignalHash = GenerateSignalHash(symbol, "WARNING", enhanced.RSI)
                 };
             }
+
+            // 🔥 NUOVO: EXTREME WARNING per RSI sotto 20 o sopra 80 (sempre genera segnale)
+            if (enhanced.RSI < 20 || enhanced.RSI > 80)
+            {
+                var confidence = CalculateConfidence(historical.Count, 50);
+                var extremeReason = enhanced.RSI < 20 ? "RSI EXTREMELY OVERSOLD" : "RSI EXTREMELY OVERBOUGHT";
+
+                _logger.LogInformation($"🚨 EXTREME WARNING for {symbol}: {extremeReason} (RSI: {enhanced.RSI:F1})");
+
+                return new TradingSignal
+                {
+                    Symbol = symbol,
+                    Type = SignalType.Warning,
+                    Confidence = confidence,
+                    Reason = $"EXTREME: {extremeReason} ({historical.Count} periods)",
+                    RSI = enhanced.RSI,
+                    MACD_Histogram = enhanced.MACD_Histogram,
+                    Price = enhanced.Price,
+                    Volume = enhanced.Volume,
+                    SignalHash = GenerateSignalHash(symbol, "EXTREME_WARNING", enhanced.RSI)
+                };
+            }
+
+            // 🔥 DEBUG: Log quando non viene generato alcun segnale
+            _logger.LogDebug($"❌ No signal for {symbol}: RSI={enhanced.RSI:F1}, MACD_Cross={enhanced.MACD_Histogram_CrossUp}, MACD_Confirmed={enhanced.MACD_Confirmed}");
 
             return null; // Nessun segnale valido
         }
@@ -261,37 +296,68 @@ namespace PortfolioSignalWorker.Services
         {
             var baseCondition = enhanced.RSI < 30 && enhanced.MACD_Confirmed;
 
+            bool result;
             if (historicalCount >= 10)
             {
-                // Con abbastanza storico, richiedi tutto
-                return baseCondition && enhanced.RSI_Confirmed && enhanced.VolumeSpike && enhanced.RSI_SMA_5 < 35;
+                result = baseCondition && enhanced.RSI_Confirmed && enhanced.VolumeSpike && enhanced.RSI_SMA_5 < 35;
             }
             else
             {
-                // Con poco storico, requisiti più semplici
-                return baseCondition && enhanced.RSI_Confirmed;
+                result = baseCondition && enhanced.RSI_Confirmed;
             }
+
+            if (result)
+            {
+                _logger.LogInformation($"🚀 STRONG BUY criteria met for {enhanced.Symbol}: RSI={enhanced.RSI:F1}, MACD_Confirmed={enhanced.MACD_Confirmed}, RSI_Confirmed={enhanced.RSI_Confirmed}");
+            }
+            else
+            {
+                _logger.LogDebug($"❌ Strong buy failed for {enhanced.Symbol}: RSI={enhanced.RSI:F1} (<30?), MACD_Confirmed={enhanced.MACD_Confirmed}, RSI_Confirmed={enhanced.RSI_Confirmed}");
+            }
+
+            return result;
         }
 
         private bool IsMediumBuySignal(StockIndicator enhanced, int historicalCount)
         {
-            return enhanced.RSI < 30 &&
-                   enhanced.RSI_Confirmed &&
-                   enhanced.MACD_Histogram_CrossUp;
+            var result = enhanced.RSI < 30 && enhanced.RSI_Confirmed && enhanced.MACD_Histogram_CrossUp;
+
+            if (result)
+            {
+                _logger.LogInformation($"📈 MEDIUM BUY criteria met for {enhanced.Symbol}: RSI={enhanced.RSI:F1}, RSI_Confirmed={enhanced.RSI_Confirmed}, MACD_CrossUp={enhanced.MACD_Histogram_CrossUp}");
+            }
+            else
+            {
+                _logger.LogDebug($"❌ Medium buy failed for {enhanced.Symbol}: RSI={enhanced.RSI:F1} (<30?), RSI_Confirmed={enhanced.RSI_Confirmed}, MACD_CrossUp={enhanced.MACD_Histogram_CrossUp}");
+            }
+
+            return result;
         }
 
         private bool IsWarningSignal(StockIndicator enhanced, List<StockIndicator> historical)
         {
-            var isExtremeOversold = enhanced.RSI < 25;
-            var hasMACD = enhanced.MACD_Histogram_CrossUp;
+            // RSI estremo (ampliato il range)
+            var isExtremeCondition = enhanced.RSI < 30 || enhanced.RSI > 70; // Era < 25 e > 75
 
+            // Volume significativo (reso meno restrittivo)
+            var hasSignificantVolume = enhanced.Volume > 100000 || enhanced.VolumeSpike;
+
+            // Trend negativo persistente (reso opzionale)
             bool trendingDown = false;
-            if (historical.Count >= 3)
+            if (historical.Count >= 2)
             {
-                trendingDown = historical.Take(3).All(x => x.RSI < enhanced.RSI + 5);
+                trendingDown = historical.Take(2).All(x => x.RSI < enhanced.RSI + 10); // Era +5
             }
 
-            return isExtremeOversold && !hasMACD;
+            // 🔥 NUOVO: Genera warning se RSI è estremo, indipendentemente da altri fattori
+            var shouldGenerate = isExtremeCondition && (hasSignificantVolume || enhanced.RSI < 25 || enhanced.RSI > 75);
+
+            if (shouldGenerate)
+            {
+                _logger.LogDebug($"✅ Warning criteria met for {enhanced.Symbol}: RSI={enhanced.RSI:F1}, Volume={enhanced.Volume}, VolumeSpike={enhanced.VolumeSpike}");
+            }
+
+            return shouldGenerate;
         }
 
         private async Task<bool> HasRecentSignalAsync(string symbol, TimeSpan timeWindow)
