@@ -56,9 +56,17 @@ public class Worker : BackgroundService
             _logger.LogInformation("🔄 Checking for database migration needs...");
             await _symbolSelection.MigrateWatchlistForVolatility();
 
-            // 🚀 NUOVO: E popola simboli volatili se non esistono
+            // 🚀 NUOVO: E popola simboli volatili SENZA re-inizializzare (evita duplicati)
             _logger.LogInformation("💥 Ensuring volatile symbols are present...");
-            await _symbolSelection.PopulateVolatileSymbols();
+            try
+            {
+                await _symbolSelection.PopulateVolatileSymbols();
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error populating volatile symbols - continuing without them");
+                // Non interrompere l'applicazione, continua senza simboli volatili
+            }
         }
 
         // 🚀 NUOVO: Forza classificazione volatilità all'avvio
@@ -226,7 +234,7 @@ public class Worker : BackgroundService
         }
     }
 
-    // 🚀 NUOVO: Metodo per inizializzare la classificazione volatilità
+
     private async Task InitializeVolatilityClassification()
     {
         try
@@ -267,8 +275,6 @@ public class Worker : BackgroundService
             _logger.LogError(ex, "Error during volatility initialization");
         }
     }
-
-    // 🚀 NUOVO: Log riassunto volatilità
     private async Task LogVolatilitySummary()
     {
         try
@@ -305,6 +311,17 @@ public class Worker : BackgroundService
             _logger.LogError(ex, "Error logging volatility summary");
         }
     }
+     
+    private int CalculateSymbolPriority(WatchlistSymbol symbol)
+    {
+        var priority = (int)symbol.VolatilityLevel * 10; // Base volatility score
+
+        if (symbol.IsBreakoutCandidate) priority += 20;
+        if (symbol.ConsecutiveHighVolDays >= 3) priority += 15;
+        if (symbol.AverageVolatilityPercent > 10) priority += 10;
+
+        return priority;
+    }
 
     // Logging della distribuzione volatilità
     private void LogVolatilityDistribution(List<(WatchlistSymbol symbol, AnalysisMode mode, int priority)> symbols)
@@ -324,17 +341,6 @@ public class Worker : BackgroundService
 
         _logger.LogInformation($"  Breakout Candidates: {breakoutCandidates}");
         _logger.LogInformation($"  Average Volatility: {avgVolatility:F1}%");
-    }
-    // Calcola priorità per logging e debug
-    private int CalculateSymbolPriority(WatchlistSymbol symbol)
-    {
-        var priority = (int)symbol.VolatilityLevel * 10; // Base volatility score
-
-        if (symbol.IsBreakoutCandidate) priority += 20;
-        if (symbol.ConsecutiveHighVolDays >= 3) priority += 15;
-        if (symbol.AverageVolatilityPercent > 10) priority += 10;
-
-        return priority;
     }
 
     // Delay dinamico per rate limiting
