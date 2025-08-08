@@ -343,52 +343,7 @@ public class Worker : BackgroundService
         _logger.LogInformation($"  Average Volatility: {avgVolatility:F1}%");
     }
 
-    // Delay dinamico per rate limiting
-    private int GetDynamicDelay(WatchlistSymbol symbol, AnalysisMode mode)
-    {
-        return (symbol.VolatilityLevel, mode) switch
-        {
-            (VolatilityLevel.Explosive, AnalysisMode.FullAnalysis) => 200,     // Esplosivi super rapidi
-            (VolatilityLevel.High, AnalysisMode.FullAnalysis) => 400,         // Volatili rapidi  
-            (VolatilityLevel.Standard, AnalysisMode.FullAnalysis) => 600,     // Standard normale
-            (VolatilityLevel.Low, _) => 1000,                                 // Lenti più lenti
-
-            (VolatilityLevel.Explosive, AnalysisMode.PreMarketWatch) => 300,  // Pre-market esplosivi
-            (_, AnalysisMode.PreMarketWatch) => 800,
-
-            (_, AnalysisMode.OffHoursMonitor) => 1200,                        // Off-hours più lenti
-
-            _ => 600 // Default
-        };
-    }
-    public async Task UpdateDynamicFrequencies()
-    {
-        var allSymbols = await _symbolSelection.GetWatchlistSummary();
-
-        foreach (var symbol in allSymbols)
-        {
-            // Ricalcola volatilità ogni 24 ore
-            if ((DateTime.UtcNow - symbol.LastVolatilityUpdate).TotalHours > 24)
-            {
-                await _symbolSelection.ClassifySymbolVolatility(symbol);
-            }
-
-            // Aggiorna frequenza monitoring
-            var currentMode = _smartMarketHours.GetAnalysisMode(symbol.Symbol);
-            var newFrequency = _smartMarketHours.GetDynamicMonitoringFrequency(symbol, currentMode);
-
-            // Aggiorna NextAnalysis solo se frequenza è cambiata significativamente
-            var timeDiff = Math.Abs((newFrequency - symbol.MonitoringFrequency).TotalMinutes);
-            if (timeDiff > 5) // Differenza > 5 minuti
-            {
-                symbol.MonitoringFrequency = newFrequency;
-                var nextAnalysis = DateTime.UtcNow.Add(newFrequency);
-                await _symbolSelection.UpdateSymbolNextAnalysis(symbol.Symbol, nextAnalysis);
-
-                _logger.LogInformation($"🔄 Updated frequency: {symbol.Symbol} = {newFrequency} (volatility: {symbol.VolatilityLevel})");
-            }
-        }
-    }
+    
 
     private string FormatHybridMessage(TradingSignal signal, AnalysisMode mode, string market = "US")
     {

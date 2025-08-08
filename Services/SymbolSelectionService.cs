@@ -209,6 +209,7 @@ namespace PortfolioSignalWorker.Services
             await AddNewRotationSymbolsToWatchlist();
         }
 
+        // 🚀 NUOVO METODO: Aggiungi solo i nuovi simboli rotation alla watchlist
         private async Task AddNewRotationSymbolsToWatchlist()
         {
             try
@@ -246,6 +247,7 @@ namespace PortfolioSignalWorker.Services
 
                                 var rotationWatchlistSymbol = new WatchlistSymbol
                                 {
+                                    // 🔥 NON SETTARE L'ID - lascia che MongoDB lo generi automaticamente
                                     Symbol = symbol,
                                     Tier = SymbolTier.Tier2_Standard, // Start in Tier 2 per volatili
                                     MonitoringFrequency = TimeSpan.FromHours(1), // Più frequente per volatili
@@ -282,18 +284,40 @@ namespace PortfolioSignalWorker.Services
                         await Task.Delay(1500); // Rate limiting
                     }
 
-                    // 🔥 INSERIMENTO SICURO: usa upsert invece di insert per evitare duplicati
+                    // 🔥 INSERIMENTO SICURO: usa upsert con filtro Symbol invece di ObjectId
                     if (watchlistSymbols.Any())
                     {
                         foreach (var symbol in watchlistSymbols)
                         {
                             try
                             {
+                                // 🔥 FIX: Usa Symbol come filtro, non ObjectId
                                 var filter = Builders<WatchlistSymbol>.Filter.Eq(x => x.Symbol, symbol.Symbol);
-                                var options = new ReplaceOptions { IsUpsert = true };
 
-                                await _watchlistCollection.ReplaceOneAsync(filter, symbol, options);
-                                _logger.LogInformation($"✅ Safely added/updated: {symbol.Symbol}");
+                                // 🔥 FIX: Usa UpdateOptions invece di ReplaceOptions
+                                var update = Builders<WatchlistSymbol>.Update
+                                    .Set(x => x.Tier, symbol.Tier)
+                                    .Set(x => x.MonitoringFrequency, symbol.MonitoringFrequency)
+                                    .Set(x => x.NextAnalysis, symbol.NextAnalysis)
+                                    .Set(x => x.IsCore, symbol.IsCore)
+                                    .Set(x => x.CanRotate, symbol.CanRotate)
+                                    .Set(x => x.OverallScore, symbol.OverallScore)
+                                    .Set(x => x.Notes, symbol.Notes)
+                                    .Set(x => x.Market, symbol.Market)
+                                    .Set(x => x.MinHistoryDays, symbol.MinHistoryDays)
+                                    .Set(x => x.VolatilityLevel, symbol.VolatilityLevel)
+                                    .Set(x => x.AverageVolatilityPercent, symbol.AverageVolatilityPercent)
+                                    .Set(x => x.LastVolatilityUpdate, symbol.LastVolatilityUpdate)
+                                    .Set(x => x.ConsecutiveHighVolDays, symbol.ConsecutiveHighVolDays)
+                                    .Set(x => x.IsBreakoutCandidate, symbol.IsBreakoutCandidate)
+                                    .Set(x => x.LastUpdated, DateTime.UtcNow)
+                                    .SetOnInsert(x => x.AddedDate, DateTime.UtcNow)
+                                    .SetOnInsert(x => x.IsActive, true);
+
+                                var options = new UpdateOptions { IsUpsert = true };
+
+                                await _watchlistCollection.UpdateOneAsync(filter, update, options);
+                                _logger.LogInformation($"✅ Safely upserted: {symbol.Symbol}");
                             }
                             catch (Exception ex)
                             {
@@ -301,7 +325,7 @@ namespace PortfolioSignalWorker.Services
                             }
                         }
 
-                        _logger.LogInformation($"✅ Successfully added {watchlistSymbols.Count} new volatile symbols to watchlist");
+                        _logger.LogInformation($"✅ Successfully processed {watchlistSymbols.Count} new volatile symbols");
                     }
                 }
                 else
