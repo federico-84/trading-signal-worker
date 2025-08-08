@@ -115,73 +115,118 @@ namespace PortfolioSignalWorker.Services
 
         public async Task PopulateVolatileSymbols()
         {
+            _logger.LogInformation("💥 Starting volatile symbols population...");
+
             var explosiveSymbols = new[]
             {
-        // Meme/Volatili US
-        ("GME", "GameStop - meme explosive"),
-        ("AMC", "AMC Entertainment - meme explosive"),
-        ("COIN", "Coinbase - crypto dependent"),
-        ("HOOD", "Robinhood - retail trading dependent"),
-        ("ROKU", "Roku - streaming volatility"),
-        ("PTON", "Peloton - consumer cyclical"),
-        ("SHOP", "Shopify - e-commerce growth"),
-        ("ABNB", "Airbnb - travel dependent"),
-        ("UBER", "Uber - gig economy"),
-        ("SNAP", "Snapchat - social media ads"),
-        ("PINS", "Pinterest - advertising dependent"),
-        ("RBLX", "Roblox - gaming/metaverse"),
-        ("PLTR", "Palantir - government contracts"),
-        ("SNOW", "Snowflake - cloud growth"),
-        ("NET", "Cloudflare - cloud security"),
-        ("CRWD", "CrowdStrike - cybersecurity"),
+        // Meme/Volatili US - Aggiungiamo anche ai CORE se molto importanti
+        ("GME", "GameStop - meme explosive", true),
+        ("SHOP", "Shopify - e-commerce growth", true), // SHOP è molto importante
+        ("COIN", "Coinbase - crypto dependent", true),
+        ("TSLA", "Tesla - already in core but mark as volatile", false), // Già presente
+        
+        // Aggiungi alla rotation
+        ("AMC", "AMC Entertainment - meme explosive", false),
+        ("HOOD", "Robinhood - retail trading dependent", false),
+        ("ROKU", "Roku - streaming volatility", false),
+        ("PTON", "Peloton - consumer cyclical", false),
+        ("ABNB", "Airbnb - travel dependent", false),
+        ("UBER", "Uber - gig economy", false),
+        ("SNAP", "Snapchat - social media ads", false),
+        ("PINS", "Pinterest - advertising dependent", false),
+        ("RBLX", "Roblox - gaming/metaverse", false),
+        ("PLTR", "Palantir - government contracts", false),
+        ("SNOW", "Snowflake - cloud growth", false),
+        ("NET", "Cloudflare - cloud security", false),
+        ("CRWD", "CrowdStrike - cybersecurity", false),
         
         // Crypto/Fintech
-        ("SQ", "Block (Square) - crypto exposure"),
-        ("MSTR", "MicroStrategy - bitcoin holdings"),
-        ("RIOT", "Riot Platforms - bitcoin mining"),
-        ("MARA", "Marathon Digital - bitcoin mining"),
+        ("SQ", "Block (Square) - crypto exposure", false),
+        ("MSTR", "MicroStrategy - bitcoin holdings", false),
+        ("RIOT", "Riot Platforms - bitcoin mining", false),
+        ("MARA", "Marathon Digital - bitcoin mining", false),
         
         // Growth Tech Volatili
-        ("ZM", "Zoom - work from home play"),
-        ("DOCU", "DocuSign - digital transformation"),
-        ("TWLO", "Twilio - communication APIs"),
-        ("OKTA", "Okta - identity management"),
+        ("ZM", "Zoom - work from home play", false),
+        ("DOCU", "DocuSign - digital transformation", false),
+        ("TWLO", "Twilio - communication APIs", false),
+        ("OKTA", "Okta - identity management", false),
         
         // Biotech Volatili  
-        ("MRNA", "Moderna - mRNA technology"),
-        ("BNTX", "BioNTech - vaccine technology"),
-        ("NVAX", "Novavax - vaccine development")
+        ("MRNA", "Moderna - mRNA technology", false),
+        ("BNTX", "BioNTech - vaccine technology", false),
+        ("NVAX", "Novavax - vaccine development", false)
     };
 
-            foreach (var (symbol, notes) in explosiveSymbols)
+            var addedCount = 0;
+            var existingCount = 0;
+
+            foreach (var (symbol, notes, isImportantCore) in explosiveSymbols)
             {
-                // Controlla se esiste già
-                var existing = await _rotationSymbolsCollection
-                    .Find(Builders<RotationSymbol>.Filter.Eq(x => x.Symbol, symbol))
-                    .FirstOrDefaultAsync();
-
-                if (existing == null)
+                try
                 {
-                    var rotationSymbol = new RotationSymbol
+                    // Se è un simbolo molto importante, aggiungilo anche ai CORE
+                    if (isImportantCore)
                     {
-                        Symbol = symbol,
-                        Market = "US",
-                        Priority = 1, // Alta priorità per volatili
-                        IsActive = true,
-                        Notes = $"VOLATILE: {notes}",
-                        CreatedAt = DateTime.UtcNow
-                    };
+                        var existingCore = await _coreSymbolsCollection
+                            .Find(Builders<CoreSymbol>.Filter.Eq(x => x.Symbol, symbol))
+                            .FirstOrDefaultAsync();
 
-                    await _rotationSymbolsCollection.InsertOneAsync(rotationSymbol);
-                    _logger.LogInformation($"💥 Added explosive symbol: {symbol}");
+                        if (existingCore == null)
+                        {
+                            var coreSymbol = new CoreSymbol
+                            {
+                                Symbol = symbol,
+                                Market = "US",
+                                Priority = 50, // Priorità media per core volatili
+                                IsActive = true,
+                                Notes = $"VOLATILE CORE: {notes}",
+                                CreatedAt = DateTime.UtcNow
+                            };
+
+                            await _coreSymbolsCollection.InsertOneAsync(coreSymbol);
+                            _logger.LogInformation($"🎯 Added to CORE: {symbol}");
+                        }
+                    }
+
+                    // Aggiungi sempre alla rotation per coverage
+                    var existingRotation = await _rotationSymbolsCollection
+                        .Find(Builders<RotationSymbol>.Filter.Eq(x => x.Symbol, symbol))
+                        .FirstOrDefaultAsync();
+
+                    if (existingRotation == null)
+                    {
+                        var rotationSymbol = new RotationSymbol
+                        {
+                            Symbol = symbol,
+                            Market = "US",
+                            Priority = 1, // Alta priorità per volatili
+                            IsActive = true,
+                            Notes = $"VOLATILE: {notes}",
+                            CreatedAt = DateTime.UtcNow
+                        };
+
+                        await _rotationSymbolsCollection.InsertOneAsync(rotationSymbol);
+                        addedCount++;
+                        _logger.LogInformation($"💥 Added to ROTATION: {symbol}");
+                    }
+                    else
+                    {
+                        existingCount++;
+                        _logger.LogDebug($"💥 Already exists: {symbol}");
+                    }
                 }
-                else
+                catch (Exception ex)
                 {
-                    _logger.LogDebug($"💥 Explosive symbol already exists: {symbol}");
+                    _logger.LogError(ex, "Error adding volatile symbol {symbol}", symbol);
                 }
             }
 
-            _logger.LogInformation($"💥 Volatile symbols population completed");
+            _logger.LogInformation($"💥 Volatile symbols population completed: {addedCount} added, {existingCount} existing");
+
+            // 🚀 IMPORTANTE: Forza re-inizializzazione della watchlist per includere i nuovi simboli
+            _logger.LogInformation("🔄 Re-initializing watchlist to include volatile symbols...");
+            await InitializeWatchlist();
         }
 
         // 3. Timing dinamico basato su volatilità
@@ -249,10 +294,55 @@ namespace PortfolioSignalWorker.Services
             _rotationSymbolsCollection.Indexes.CreateOne(new CreateIndexModel<RotationSymbol>(rotationSymbolIndex,
                 new CreateIndexOptions { Unique = true }));
         }
+        public async Task MigrateWatchlistForVolatility()
+        {
+            try
+            {
+                _logger.LogInformation("🔄 Starting watchlist migration for volatility fields...");
 
-        // Removed: InitializeDefaultSymbolsIfEmpty, PopulateDefaultCoreSymbols, PopulateDefaultRotationSymbols
-        // All symbols must be manually inserted into MongoDB collections
+                // Trova tutti i simboli che non hanno i nuovi campi volatilità
+                var filter = Builders<WatchlistSymbol>.Filter.Or(
+                    Builders<WatchlistSymbol>.Filter.Exists(x => x.VolatilityLevel, false),
+                    Builders<WatchlistSymbol>.Filter.Eq(x => x.LastVolatilityUpdate, default(DateTime))
+                );
 
+                var symbolsToMigrate = await _watchlistCollection.Find(filter).ToListAsync();
+
+                if (symbolsToMigrate.Count > 0)
+                {
+                    _logger.LogInformation($"📊 Migrating {symbolsToMigrate.Count} symbols to add volatility fields...");
+
+                    var updates = new List<WriteModel<WatchlistSymbol>>();
+
+                    foreach (var symbol in symbolsToMigrate)
+                    {
+                        var updateFilter = Builders<WatchlistSymbol>.Filter.Eq(x => x.Id, symbol.Id);
+                        var update = Builders<WatchlistSymbol>.Update
+                            .Set(x => x.VolatilityLevel, VolatilityLevel.Standard) // Default a Standard
+                            .Set(x => x.AverageVolatilityPercent, 0.0)
+                            .Set(x => x.LastVolatilityUpdate, default(DateTime)) // Forza ricalcolo
+                            .Set(x => x.ConsecutiveHighVolDays, 0)
+                            .Set(x => x.IsBreakoutCandidate, false);
+
+                        updates.Add(new UpdateOneModel<WatchlistSymbol>(updateFilter, update));
+                    }
+
+                    if (updates.Count > 0)
+                    {
+                        await _watchlistCollection.BulkWriteAsync(updates);
+                        _logger.LogInformation($"✅ Migration completed: {updates.Count} symbols updated with volatility fields");
+                    }
+                }
+                else
+                {
+                    _logger.LogInformation("✅ No migration needed - all symbols have volatility fields");
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error during watchlist migration");
+            }
+        }
         public async Task InitializeWatchlist()
         {
             _logger.LogInformation("Initializing watchlist from MongoDB symbol collections...");
@@ -376,6 +466,11 @@ namespace PortfolioSignalWorker.Services
 
             // 8. Insert into watchlist
             await _watchlistCollection.InsertManyAsync(watchlistSymbols);
+
+
+            await MigrateWatchlistForVolatility();
+
+            _logger.LogInformation("Initializing watchlist from MongoDB symbol collections...");
 
             _logger.LogInformation($"Watchlist initialized from MongoDB:");
             _logger.LogInformation($"  Core symbols: {coreSymbols.Count}");
