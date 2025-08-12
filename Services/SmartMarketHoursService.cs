@@ -103,10 +103,10 @@ namespace PortfolioSignalWorker.Services
         {
             return mode switch
             {
-                AnalysisMode.FullAnalysis => 60.0,     // Soglia normale durante mercato
-                AnalysisMode.PreMarketWatch => 75.0,   // Soglia più alta per pre-market
-                AnalysisMode.OffHoursMonitor => 85.0,  // Solo segnali molto forti off-hours
-                AnalysisMode.Skip => double.MaxValue,  // Non inviare mai
+                AnalysisMode.FullAnalysis => 60.0,     // Solo quando serve davvero
+                AnalysisMode.PreMarketWatch => 80.0,   // Pre-market più selettivo
+                AnalysisMode.OffHoursMonitor => double.MaxValue, // 🚫 Mai inviare off-hours
+                AnalysisMode.Skip => double.MaxValue,
                 _ => 60.0
             };
         }
@@ -135,9 +135,9 @@ namespace PortfolioSignalWorker.Services
 
             return mode switch
             {
-                AnalysisMode.FullAnalysis => $"🟢 LIVE - {marketInfo}",
-                AnalysisMode.PreMarketWatch => $"🟡 PRE-MARKET - {marketInfo}",
-                AnalysisMode.OffHoursMonitor => $"🟠 OFF-HOURS - {marketInfo}",
+                AnalysisMode.FullAnalysis => $"🟢 TRADING LIVE - {marketInfo}",
+                AnalysisMode.PreMarketWatch => $"🟡 SETUP MODE - {marketInfo}",
+                AnalysisMode.OffHoursMonitor => $"🚫 MARKET CLOSED - No signals sent",
                 AnalysisMode.Skip => $"❌ SKIP - {marketInfo}",
                 _ => marketInfo
             };
@@ -147,21 +147,44 @@ namespace PortfolioSignalWorker.Services
         {
             var threshold = GetConfidenceThreshold(mode);
 
-            // Durante mercato aperto, invia tutti i segnali sopra soglia
+            // 🎯 STRATEGIA PROFESSIONALE: Solo durante mercati aperti
             if (mode == AnalysisMode.FullAnalysis)
-                return signal.Confidence >= threshold;
+            {
+                // ✅ Mercato APERTO = Invio tutti i segnali di qualità
+                var result = signal.Confidence >= threshold;
+                _logger.LogInformation($"🟢 LIVE MARKET: {signal.Symbol} {signal.Confidence}% >= {threshold}% = {(result ? "SEND" : "SKIP")}");
+                return result;
+            }
 
-            // Pre-market: solo Buy e Warning forti
+            // 🟡 PRE-MARKET: Solo per setup di preparazione (opzionale)
             if (mode == AnalysisMode.PreMarketWatch)
-                return signal.Confidence >= threshold &&
-                       (signal.Type == SignalType.Buy || signal.Type == SignalType.Warning);
+            {
+                // Puoi abilitare/disabilitare i pre-market alerts
+                var enablePreMarket = true; // 🔧 Set false per disabilitare completamente
 
-            // Off-hours: solo segnali molto forti e specifici patterns
+                if (!enablePreMarket)
+                {
+                    _logger.LogInformation($"🟡 PRE-MARKET DISABLED: Skipping {signal.Symbol}");
+                    return false;
+                }
+
+                var confidenceCheck = signal.Confidence >= threshold;
+                var typeCheck = (signal.Type == SignalType.Buy || signal.Type == SignalType.Warning);
+                var result = confidenceCheck && typeCheck;
+
+                _logger.LogInformation($"🟡 PRE-MARKET SETUP: {signal.Symbol} = {(result ? "SEND" : "SKIP")} (opens soon)");
+                return result;
+            }
+
+            // 🚫 OFF-HOURS: Mercato chiuso = NO SEGNALI
             if (mode == AnalysisMode.OffHoursMonitor)
-                return signal.Confidence >= threshold &&
-                       (signal.Type == SignalType.Buy || signal.Type == SignalType.Warning) &&
-                       (signal.RSI < 25 || signal.RSI > 75); // Solo condizioni estreme
+            {
+                _logger.LogInformation($"🟠 OFF-HOURS: {signal.Symbol} - Market closed, skipping signal (professional strategy)");
+                return false; // 🎯 SEMPRE false per off-hours
+            }
 
+            // 🚫 SKIP: Troppo lontano dall'apertura
+            _logger.LogInformation($"❌ SKIP MODE: {signal.Symbol} - Too far from market open");
             return false;
         }
 
