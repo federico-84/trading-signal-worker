@@ -1,3 +1,4 @@
+﻿using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting.WindowsServices;
 using PortfolioSignalWorker.Services;
 
@@ -16,6 +17,14 @@ var builder = Host.CreateDefaultBuilder(args)
         services.AddSingleton<TelegramService>();
         services.AddSingleton<MongoService>();
         services.AddSingleton<SmartMarketHoursService>();
+        services.AddSingleton<CurrencyConversionService>();
+        services.AddSingleton<BreakoutDetectionService>(provider =>
+        {
+            var yahooFinance = provider.GetRequiredService<YahooFinanceService>();
+            var mongo = provider.GetRequiredService<MongoService>();
+            var logger = provider.GetRequiredService<ILogger<BreakoutDetectionService>>();
+            return new BreakoutDetectionService(yahooFinance, mongo.GetDatabase(), logger);
+        });
 
         // Signal Processing
         services.AddSingleton<SignalFilterService>(provider =>
@@ -39,9 +48,15 @@ var builder = Host.CreateDefaultBuilder(args)
         {
             var mongo = provider.GetRequiredService<MongoService>();
             var yahooFinance = provider.GetRequiredService<YahooFinanceService>();
+            var currencyService = provider.GetRequiredService<CurrencyConversionService>(); // 🆕 NUOVO
             var logger = provider.GetRequiredService<ILogger<RiskManagementService>>();
             var config = provider.GetRequiredService<IConfiguration>();
-            return new RiskManagementService(mongo.GetDatabase(), yahooFinance, logger, config);
+            return new RiskManagementService(
+                mongo.GetDatabase(),
+                yahooFinance,
+                logger,
+                currencyService,  // 🆕 NUOVO parametro
+                config);
         });
 
         // Worker Service

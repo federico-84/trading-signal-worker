@@ -16,18 +16,185 @@ namespace PortfolioSignalWorker.Services
             _signalCollection = database.GetCollection<TradingSignal>("TradingSignals");
             _logger = logger;
         }
+        // Metodo per validare segnali breakout specificamente  
+        public bool ValidateBreakoutSignal(TradingSignal signal)
+        {
+            var errors = new List<string>();
 
+            // 1. Breakout signals devono essere BUY
+            if (signal.Type != SignalType.Buy)
+            {
+                errors.Add($"Breakout signal deve essere BUY, ricevuto: {signal.Type}");
+            }
+
+            // 2. Confidence specifica per breakout (più alta)
+            if (signal.Confidence < 70)
+            {
+                errors.Add($"Breakout confidence {signal.Confidence}% < 70% minimo");
+            }
+
+            // 3. Volume strength per breakout (deve essere significativo)
+            if (signal.VolumeStrength < 6)
+            {
+                errors.Add($"Volume strength {signal.VolumeStrength} < 6 per breakout");
+            }
+
+            // 4. Trend strength per breakout
+            if (signal.TrendStrength < 6)
+            {
+                errors.Add($"Trend strength {signal.TrendStrength} < 6 per breakout");
+            }
+
+            // 5. RSI non deve essere troppo alto per breakout BUY
+            if (signal.RSI > 70)
+            {
+                errors.Add($"RSI {signal.RSI:F1} troppo alto per breakout BUY (>70)");
+            }
+
+            // 6. Price deve essere valido
+            if (signal.Price <= 0)
+            {
+                errors.Add($"Prezzo invalido per breakout: {signal.Price}");
+            }
+
+            // 7. Resistance level validation specifica per breakout
+            if (signal.ResistanceLevel.HasValue && signal.ResistanceLevel > 0)
+            {
+                var distanceToResistance = Math.Abs(signal.Price - signal.ResistanceLevel.Value) / signal.Price * 100;
+                if (distanceToResistance > 10) // Più di 10% dalla resistenza
+                {
+                    errors.Add($"Breakout troppo lontano da resistenza: {distanceToResistance:F1}%");
+                }
+            }
+
+            if (errors.Any())
+            {
+                _logger.LogWarning($"BREAKOUT VALIDATION FAILED for {signal.Symbol}:");
+                foreach (var error in errors)
+                {
+                    _logger.LogWarning($"  ❌ {error}");
+                }
+                return false;
+            }
+
+            _logger.LogDebug($"✅ Breakout signal validation PASSED for {signal.Symbol}");
+            return true;
+        }
+
+        // Metodo per prevenire spam di segnali breakout
+        public async Task<bool> HasRecentBreakoutSignalAsync(string symbol, TimeSpan timeWindow)
+        {
+            var cutoffTime = DateTime.UtcNow.Subtract(timeWindow);
+            var filter = Builders<TradingSignal>.Filter.And(
+                Builders<TradingSignal>.Filter.Eq(x => x.Symbol, symbol),
+                Builders<TradingSignal>.Filter.Gte(x => x.CreatedAt, cutoffTime),
+                Builders<TradingSignal>.Filter.Eq(x => x.Sent, true),
+                Builders<TradingSignal>.Filter.Regex(x => x.Reason, "BREAKOUT") // Solo segnali breakout
+            );
+
+            var count = await _signalCollection.CountDocumentsAsync(filter);
+
+            if (count > 0)
+            {
+                _logger.LogDebug($"Recent breakout signal found for {symbol} within {timeWindow.TotalHours:F1}h");
+            }
+
+            return count > 0;
+        }
+
+        // Metodo per statistiche specifiche breakout
+        public async Task<BreakoutValidationStats> GetBreakoutValidationStatsAsync(DateTime fromDate)
+        {
+            var breakoutSignals = await _signalCollection
+                .Find(Builders<TradingSignal>.Filter.And(
+                    Builders<TradingSignal>.Filter.Gte(x => x.CreatedAt, fromDate),
+                    Builders<TradingSignal>.Filter.Regex(x => x.Reason, "BREAKOUT")
+                ))
+                .ToListAsync();
+
+            var stats = new BreakoutValidationStats
+            {
+                TotalBreakoutSignals = breakoutSignals.Count,
+                ValidBreakoutSignals = 0,
+                InvalidBreakoutSignals = 0,
+                AverageConfidence = 0,
+                BreakoutTypeDistribution = new Dictionary<string, int>()
+            };
+
+            if (breakoutSignals.Any())
+            {
+                stats.AverageConfidence = breakoutSignals.Average(s => s.Confidence);
+
+                foreach (var signal in breakoutSignals)
+                {
+                    if (ValidateBreakoutSignal(signal))
+                    {
+                        stats.ValidBreakoutSignals++;
+                    }
+                    else
+                    {
+                        stats.InvalidBreakoutSignals++;
+                    }
+
+                    // Extract breakout type from reason
+                    var breakoutType = ExtractBreakoutTypeFromReason(signal.Reason);
+                    if (!string.IsNullOrEmpty(breakoutType))
+                    {
+                        if (!stats.BreakoutTypeDistribution.ContainsKey(breakoutType))
+                            stats.BreakoutTypeDistribution[breakoutType] = 0;
+
+                        stats.BreakoutTypeDistribution[breakoutType]++;
+                    }
+                }
+            }
+
+            return stats;
+        }
+
+        private string ExtractBreakoutTypeFromReason(string reason)
+        {
+            if (string.IsNullOrEmpty(reason)) return "Unknown";
+
+            if (reason.Contains("IMMINENT")) return "Imminent";
+            if (reason.Contains("PROBABLE")) return "Probable";
+            if (reason.Contains("POSSIBLE")) return "Possible";
+
+            return "Other";
+        }
+
+        // Metodo combinato per validazione completa (tradizionale + breakout)
+        public async Task<bool> ValidateSignalComprehensiveAsync(TradingSignal signal)
+        {
+            // Prima validazione standard
+            if (!ValidateSignalQuality(signal))
+            {
+                return false;
+            }
+
+            // Se è un segnale breakout, validazione aggiuntiva
+            if (signal.Reason?.Contains("BREAKOUT") == true)
+            {
+                // Controlla se c'è già un breakout recente (evita spam)
+                if (await HasRecentBreakoutSignalAsync(signal.Symbol, TimeSpan.FromHours(6)))
+                {
+                    _logger.LogDebug($"Recent breakout signal exists for {signal.Symbol} - skipping to avoid spam");
+                    return false;
+                }
+
+                // Validazione specifica breakout
+                return ValidateBreakoutSignal(signal);
+            }
+
+            return true;
+        }
         public async Task<TradingSignal?> AnalyzeSignalAsync(string symbol, StockIndicator currentIndicator)
         {
             // 1. Ottieni storico ultimi 20 periodi
             var historicalData = await GetHistoricalDataAsync(symbol, 20);
 
-            // MODIFICA: Ridotto requisito minimo da 5 a 1 per permettere l'avvio
             if (historicalData.Count < 1)
             {
                 _logger.LogWarning($"Nessun dato storico per {symbol}. Primo avvio - genero comunque segnale base");
-
-                // Per il primo avvio, genera segnali basici solo su indicatori correnti
                 return await GenerateBasicSignalAsync(symbol, currentIndicator);
             }
 
@@ -39,9 +206,124 @@ namespace PortfolioSignalWorker.Services
             // 3. Applica filtri anti-rumore
             var signal = await GenerateFilteredSignalAsync(symbol, enhancedIndicator, historicalData);
 
+            // 🔧 NUOVO: 4. Validazione pre-invio CRITICA
+            if (signal != null && !ValidateSignalQuality(signal))
+            {
+                _logger.LogWarning($"Signal REJECTED for {symbol} - failed quality validation");
+                return null; // Blocca segnali buggy
+            }
+
             return signal;
         }
 
+        // 🔧 NUOVO: Validazione qualità segnale PRIMA dell'invio
+        private bool ValidateSignalQuality(TradingSignal signal)
+        {
+            var errors = new List<string>();
+
+            // 1. Confidence minima
+            if (signal.Confidence < 60)
+            {
+                errors.Add($"Confidence troppo bassa: {signal.Confidence}% < 60%");
+            }
+
+            // 2. Solo segnali BUY per il backtesting (evita WARNING buggy)
+            if (signal.Type != SignalType.Buy && signal.Type != SignalType.Warning)
+            {
+                errors.Add($"Tipo segnale non supportato: {signal.Type}");
+            }
+
+            // 3. RSI in range ragionevole
+            if (signal.RSI <= 0 || signal.RSI >= 100)
+            {
+                errors.Add($"RSI fuori range: {signal.RSI}");
+            }
+
+            // 4. Prezzo ragionevole
+            if (signal.Price <= 0)
+            {
+                errors.Add($"Prezzo invalido: {signal.Price}");
+            }
+
+            // 5. Volume minimo
+            if (signal.Volume <= 0)
+            {
+                errors.Add($"Volume invalido: {signal.Volume}");
+            }
+
+            // 6. 🔧 VALIDAZIONE RISK MANAGEMENT (se presente)
+            if (signal.StopLoss.HasValue && signal.TakeProfit.HasValue)
+            {
+                // Per segnali BUY: StopLoss < Price < TakeProfit
+                if (signal.Type == SignalType.Buy)
+                {
+                    if (signal.StopLoss >= signal.Price)
+                    {
+                        errors.Add($"Stop Loss {signal.StopLoss:F2} >= Price {signal.Price:F2} per BUY signal");
+                    }
+
+                    if (signal.TakeProfit <= signal.Price)
+                    {
+                        errors.Add($"Take Profit {signal.TakeProfit:F2} <= Price {signal.Price:F2} per BUY signal");
+                    }
+                }
+
+                // Percentuali positive
+                if (signal.StopLossPercent.HasValue && signal.StopLossPercent <= 0)
+                {
+                    errors.Add($"Stop Loss Percent negativo: {signal.StopLossPercent}%");
+                }
+
+                if (signal.TakeProfitPercent.HasValue && signal.TakeProfitPercent <= 0)
+                {
+                    errors.Add($"Take Profit Percent negativo: {signal.TakeProfitPercent}%");
+                }
+
+                // Risk/Reward ragionevole
+                if (signal.RiskRewardRatio.HasValue && (signal.RiskRewardRatio <= 0 || signal.RiskRewardRatio > 10))
+                {
+                    errors.Add($"Risk/Reward ratio irrealistico: {signal.RiskRewardRatio}");
+                }
+            }
+
+            // 7. Supporto/Resistenza logici (se presenti)
+            if (signal.SupportLevel.HasValue && signal.SupportLevel >= signal.Price)
+            {
+                errors.Add($"Support {signal.SupportLevel:F2} >= Price {signal.Price:F2}");
+            }
+
+            if (signal.ResistanceLevel.HasValue && signal.ResistanceLevel <= signal.Price)
+            {
+                errors.Add($"Resistance {signal.ResistanceLevel:F2} <= Price {signal.Price:F2}");
+            }
+
+            // 8. Position sizing ragionevole (se presente)
+            if (signal.SuggestedShares.HasValue && signal.SuggestedShares < 0)
+            {
+                errors.Add($"Suggested Shares negative: {signal.SuggestedShares}");
+            }
+
+            if (errors.Any())
+            {
+                _logger.LogError($"SIGNAL VALIDATION FAILED for {signal.Symbol}:");
+                foreach (var error in errors)
+                {
+                    _logger.LogError($"  ❌ {error}");
+                }
+                return false;
+            }
+
+            // 9. 🔧 FILTRO AGGIUNTIVO: Skip segnali WARNING con confidence bassa
+            if (signal.Type == SignalType.Warning && signal.Confidence < 75)
+            {
+                _logger.LogWarning($"Skipping WARNING signal for {signal.Symbol} - confidence {signal.Confidence}% < 75%");
+                return false;
+            }
+
+            _logger.LogDebug($"✅ Signal validation PASSED for {signal.Symbol} (Type: {signal.Type}, Confidence: {signal.Confidence}%)");
+            return true;
+        }
+        
         // NUOVO: Segnali basici per quando non abbiamo storico
         private async Task<TradingSignal?> GenerateBasicSignalAsync(string symbol, StockIndicator current)
         {

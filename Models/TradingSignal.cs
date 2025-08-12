@@ -52,6 +52,46 @@ namespace PortfolioSignalWorker.Models
         public string? MarketCondition { get; set; }    // "Bullish", "Bearish", "Sideways"
         public double? VolumeStrength { get; set; }     // Forza del volume (1-10)
         public double? TrendStrength { get; set; }      // Forza del trend (1-10)
+
+        /// <summary>
+        /// Valuta del segnale (sempre EUR per TradeRepublic)
+        /// </summary>
+        public string Currency { get; set; } = "EUR";
+
+        /// <summary>
+        /// Valuta originale del simbolo (USD, CHF, GBP, etc.)
+        /// </summary>
+        public string OriginalCurrency { get; set; } = "USD";
+
+        /// <summary>
+        /// Tasso di cambio utilizzato per conversione (OriginalCurrency -> EUR)
+        /// </summary>
+        public double ExchangeRate { get; set; } = 1.0;
+
+        /// <summary>
+        /// Timestamp dell'ultimo aggiornamento del tasso di cambio
+        /// </summary>
+        public DateTime ExchangeRateUpdated { get; set; } = DateTime.UtcNow;
+
+        /// <summary>
+        /// Prezzo originale nella valuta del simbolo (prima della conversione)
+        /// </summary>
+        public double? OriginalPrice { get; set; }
+
+        /// <summary>
+        /// Stop Loss originale nella valuta del simbolo
+        /// </summary>
+        public double? OriginalStopLoss { get; set; }
+
+        /// <summary>
+        /// Take Profit originale nella valuta del simbolo  
+        /// </summary>
+        public double? OriginalTakeProfit { get; set; }
+
+        /// <summary>
+        /// Note sulla conversione valuta per debugging
+        /// </summary>
+        public string CurrencyConversionNotes { get; set; } = "";
     }
 
     public enum SignalType
