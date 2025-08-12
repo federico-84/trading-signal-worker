@@ -8,7 +8,7 @@ namespace PortfolioSignalWorker.Services
         private readonly IMongoCollection<StockIndicator> _indicatorCollection;
         private readonly YahooFinanceService _yahooFinance;
         private readonly ILogger<RiskManagementService> _logger;
-        private readonly RiskParameters _riskParams;
+        private readonly RiskParameters _riskParams;  
         private readonly CurrencyConversionService _currencyService;
 
         public RiskManagementService(
@@ -72,18 +72,7 @@ namespace PortfolioSignalWorker.Services
                 var currentPriceEUR = symbolCurrency != "EUR" ?
                     await _currencyService.ConvertToEuroAsync(signal.Price, symbolCurrency) :
                     signal.Price;
-
-                if (support >= currentPriceEUR)
-                {
-                    _logger.LogWarning($"Invalid support €{support:F2} >= price €{currentPriceEUR:F2} for {signal.Symbol} - adjusting");
-                    support = currentPriceEUR * 0.95;
-                }
-
-                if (resistance <= currentPriceEUR)
-                {
-                    _logger.LogWarning($"Invalid resistance €{resistance:F2} <= price €{currentPriceEUR:F2} for {signal.Symbol} - adjusting");
-                    resistance = currentPriceEUR * 1.05;
-                }
+              
 
                 signal.SupportLevel = support;
                 signal.ResistanceLevel = resistance;
@@ -625,133 +614,7 @@ namespace PortfolioSignalWorker.Services
             }
         }
 
-        private LevelCalculationResult CalculateRiskLevels(
-     double currentPrice,
-     double atr,
-     double support,
-     double resistance,
-     double confidence)
-        {
-            var result = new LevelCalculationResult();
-
-            _logger.LogDebug($"🔍 Risk calculation for {currentPrice:F2}: ATR={atr:F3}, Support={support:F2}, Resistance={resistance:F2}");
-
-            // METODO 1: Stop Loss basato su ATR (più dinamico)
-            if (_riskParams.UseATRForStopLoss && atr > 0)
-            {
-                var atrStopDistance = atr * _riskParams.ATRMultiplier;
-                var atrBasedStop = currentPrice - atrStopDistance; // 🔧 FIX: SOTTRAI per BUY signal
-
-                _logger.LogDebug($"ATR Stop: {currentPrice:F2} - ({atr:F3} * {_riskParams.ATRMultiplier}) = {atrBasedStop:F2}");
-
-                // 🔧 FIX: Valida che support sia SOTTO il prezzo corrente
-                if (support > 0 && support < currentPrice * 0.98) // Support deve essere almeno 2% sotto
-                {
-                    // Support valido: usa il maggiore tra ATR stop e support (più conservativo)
-                    result.StopLoss = Math.Max(atrBasedStop, support * 0.98);
-                    result.CalculationMethod = $"ATR+Support: max({atrBasedStop:F2}, {support * 0.98:F2})";
-                }
-                else
-                {
-                    // Support non valido: usa solo ATR
-                    result.StopLoss = atrBasedStop;
-                    result.CalculationMethod = $"ATR-only: {currentPrice:F2} - {atrStopDistance:F2}";
-
-                    if (support > 0 && support >= currentPrice)
-                    {
-                        _logger.LogWarning($"❌ Invalid support {support:F2} >= price {currentPrice:F2} - using ATR only");
-                    }
-                }
-            }
-            else
-            {
-                // METODO 2: Stop Loss percentuale fisso
-                var stopLossPercent = GetDynamicStopLossPercent(confidence);
-                result.StopLoss = currentPrice * (1 - stopLossPercent / 100); // 🔧 FIX: (1 - percent/100)
-                result.CalculationMethod = $"Percentage: {currentPrice:F2} * (1 - {stopLossPercent:F1}%)";
-
-                _logger.LogDebug($"Percentage Stop: {currentPrice:F2} * (1 - {stopLossPercent:F1}/100) = {result.StopLoss:F2}");
-            }
-
-            // 🚨 CRITICAL VALIDATION: Stop Loss deve essere SOTTO current price per BUY
-            if (result.StopLoss >= currentPrice)
-            {
-                _logger.LogError($"🚨 CRITICAL: StopLoss {result.StopLoss:F2} >= Price {currentPrice:F2} - FORCING fallback");
-                result.StopLoss = currentPrice * 0.95; // 5% sotto come fallback sicuro
-                result.CalculationMethod = "EMERGENCY FALLBACK: 5% below current price";
-            }
-
-            // Take Profit intelligente basato su confidence e resistenza
-            var takeProfitPercent = GetDynamicTakeProfitPercent(confidence);
-            var calculatedTakeProfit = currentPrice * (1 + takeProfitPercent / 100); // 🔧 FIX: (1 + percent/100)
-
-            _logger.LogDebug($"Take Profit calc: {currentPrice:F2} * (1 + {takeProfitPercent:F1}/100) = {calculatedTakeProfit:F2}");
-
-            // 🔧 FIX: Valida che resistance sia SOPRA il prezzo corrente
-            if (resistance > currentPrice * 1.02 && calculatedTakeProfit > resistance * 0.95) // Resistance deve essere almeno 2% sopra
-            {
-                result.TakeProfit = resistance * 0.95; // 5% sotto resistenza
-                result.CalculationMethod += " + resistance-adjusted TP";
-                _logger.LogDebug($"✅ Valid resistance {resistance:F2} used: TP = {result.TakeProfit:F2}");
-            }
-            else
-            {
-                result.TakeProfit = calculatedTakeProfit;
-
-                if (resistance > 0 && resistance <= currentPrice * 1.02)
-                {
-                    _logger.LogWarning($"❌ Invalid resistance {resistance:F2} <= price+2% {currentPrice * 1.02:F2}");
-                }
-            }
-
-            // 🚨 CRITICAL VALIDATION: Take Profit deve essere SOPRA current price per BUY
-            if (result.TakeProfit <= currentPrice)
-            {
-                _logger.LogError($"🚨 CRITICAL: TakeProfit {result.TakeProfit:F2} <= Price {currentPrice:F2} - FORCING fallback");
-                result.TakeProfit = currentPrice * 1.10; // 10% sopra come fallback sicuro
-            }
-
-            // Calcola percentuali effettive
-            result.StopLossPercent = ((currentPrice - result.StopLoss) / currentPrice) * 100;
-            result.TakeProfitPercent = ((result.TakeProfit - currentPrice) / currentPrice) * 100;
-
-            // Risk/Reward ratio
-            var risk = currentPrice - result.StopLoss;
-            var reward = result.TakeProfit - currentPrice;
-            result.RiskRewardRatio = risk > 0 ? reward / risk : 0;
-
-            // Verifica che il R/R sia accettabile
-            if (result.RiskRewardRatio < _riskParams.MinRiskRewardRatio)
-            {
-                // Aggiusta il take profit per migliorare R/R
-                result.TakeProfit = currentPrice + (risk * _riskParams.MinRiskRewardRatio);
-                result.TakeProfitPercent = ((result.TakeProfit - currentPrice) / currentPrice) * 100;
-                result.RiskRewardRatio = _riskParams.MinRiskRewardRatio;
-                result.CalculationMethod += " + R/R adjusted";
-            }
-
-            result.SupportLevel = support;
-            result.ResistanceLevel = resistance;
-            result.Reasoning = $"{result.CalculationMethod}, R/R: 1:{result.RiskRewardRatio:F1}";
-
-            // 🔧 FINAL VALIDATION: Tutti i valori devono essere matematicamente corretti
-            if (result.StopLoss >= currentPrice || result.TakeProfit <= currentPrice ||
-                result.StopLossPercent <= 0 || result.TakeProfitPercent <= 0)
-            {
-                var error = $"Invalid risk levels: SL={result.StopLoss:F2} (should < {currentPrice:F2}), " +
-                           $"TP={result.TakeProfit:F2} (should > {currentPrice:F2}), " +
-                           $"SL%={result.StopLossPercent:F1}, TP%={result.TakeProfitPercent:F1}";
-
-                _logger.LogError($"🚨 VALIDATION FAILED: {error}");
-                throw new InvalidOperationException($"Risk calculation validation failed: {error}");
-            }
-
-            _logger.LogInformation($"✅ Risk levels validated: " +
-                $"Entry={currentPrice:F2}, SL={result.StopLoss:F2} (-{result.StopLossPercent:F1}%), " +
-                $"TP={result.TakeProfit:F2} (+{result.TakeProfitPercent:F1}%), R/R=1:{result.RiskRewardRatio:F1}");
-
-            return result;
-        }
+         
 
         private double GetDynamicStopLossPercent(double confidence)
         {
@@ -849,76 +712,6 @@ namespace PortfolioSignalWorker.Services
                 signal.VolumeStrength = 5;
                 signal.TrendStrength = 5;
             }
-        }
-
-        private string GenerateEntryStrategy(TradingSignal signal, LevelCalculationResult levels)
-        {
-            var strategies = new List<string>();
-
-            if (signal.Confidence >= 85)
-            {
-                strategies.Add("Market order at current price");
-            }
-            else
-            {
-                strategies.Add($"Limit order at ${signal.Price * 0.995:F2} (0.5% below current)");
-            }
-
-            if (signal.VolumeStrength >= 7)
-            {
-                strategies.Add("High volume - enter immediately");
-            }
-            else
-            {
-                strategies.Add("Wait for volume confirmation");
-            }
-
-            if (signal.SupportLevel > 0 && signal.Price > signal.SupportLevel * 1.02)
-            {
-                strategies.Add($"Above support (${signal.SupportLevel:F2}) - good entry");
-            }
-
-            return string.Join(" | ", strategies);
-        }
-
-        private string GenerateExitStrategy(TradingSignal signal, LevelCalculationResult levels)
-        {
-            var strategies = new List<string>();
-
-            strategies.Add($"Stop Loss: ${levels.StopLoss:F2} ({levels.StopLossPercent:F1}%)");
-            strategies.Add($"Take Profit: ${levels.TakeProfit:F2} ({levels.TakeProfitPercent:F1}%)");
-
-            if (signal.ResistanceLevel > 0 && signal.ResistanceLevel > signal.Price)
-            {
-                strategies.Add($"Watch resistance at ${signal.ResistanceLevel:F2}");
-            }
-
-            if (signal.Confidence >= 90)
-            {
-                strategies.Add("Consider partial profit-taking at 50% of TP");
-            }
-
-            return string.Join(" | ", strategies);
-        }
-
-        private void ApplyDefaultRiskLevels(TradingSignal signal)
-        {
-            signal.StopLoss = signal.Price * (1 - _riskParams.DefaultStopLossPercent / 100);
-            signal.TakeProfit = signal.Price * (1 + _riskParams.DefaultTakeProfitPercent / 100);
-            signal.StopLossPercent = _riskParams.DefaultStopLossPercent;
-            signal.TakeProfitPercent = _riskParams.DefaultTakeProfitPercent;
-            signal.RiskRewardRatio = _riskParams.DefaultTakeProfitPercent / _riskParams.DefaultStopLossPercent;
-
-            var positionSizing = CalculatePositionSizing(signal.Price, signal.StopLoss.Value);
-            signal.SuggestedShares = positionSizing.shares;
-            signal.PositionValue = positionSizing.value;
-            signal.MaxRiskAmount = positionSizing.maxRisk;
-            signal.PotentialGainAmount = positionSizing.potentialGain;
-
-            signal.EntryStrategy = "Default market order";
-            signal.ExitStrategy = $"SL: ${signal.StopLoss:F2} | TP: ${signal.TakeProfit:F2}";
-
-            _logger.LogWarning($"Applied DEFAULT risk levels for {signal.Symbol} due to calculation failures");
-        }
+        } 
     }
 }
