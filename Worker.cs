@@ -241,41 +241,70 @@ public class Worker : BackgroundService
                         // Traditional signal processing
                         if (signal != null)
                         {
-                            if (!await _signalFilter.ValidateSignalComprehensiveAsync(signal))
-                            {
-                                _logger.LogDebug($"⚠️ Traditional signal validation failed for {watchlistSymbol.Symbol}");
-                                continue;
-                            }
+                            _logger.LogInformation($"📈 Signal detected for {watchlistSymbol.Symbol}: {signal.Type} ({signal.Confidence}%) - {signal.Reason}");
 
+                            // ===== HYBRID DECISION: Dovrei inviare questo segnale? =====
                             var shouldSend = _smartMarketHours.ShouldSendSignal(signal, analysisMode);
-                            var enhancedShouldSend = shouldSend && ApplyEnhancedFilters(signal, analysisMode);
+                            var threshold = _smartMarketHours.GetConfidenceThreshold(analysisMode);
 
-                            if (enhancedShouldSend)
+                            _logger.LogInformation($"🎯 Signal decision for {watchlistSymbol.Symbol}: " +
+                                $"Confidence {signal.Confidence}% vs threshold {threshold}% = {(shouldSend ? "SEND" : "SKIP")}");
+
+                            if (shouldSend)
                             {
-                                signal = await _riskManagement.EnhanceSignalWithRiskManagement(signal);
-
-                                if (!await _signalFilter.ValidateSignalComprehensiveAsync(signal))
+                                try
                                 {
-                                    _logger.LogWarning($"🚨 Signal post-risk-management validation failed for {watchlistSymbol.Symbol}");
-                                    continue;
+                                    // 🛡️ STEP 1: Risk Management
+                                    _logger.LogInformation($"🛡️ STEP 1: Adding risk management to {watchlistSymbol.Symbol}...");
+                                    signal = await _riskManagement.EnhanceSignalWithRiskManagement(signal);
+                                    _logger.LogInformation($"✅ STEP 1 COMPLETED: Risk management added to {watchlistSymbol.Symbol}");
+
+                                    // 💾 STEP 2: Save to MongoDB
+                                    _logger.LogInformation($"💾 STEP 2: Saving signal to database for {watchlistSymbol.Symbol}...");
+                                    await _mongo.SaveSignalAsync(signal);
+                                    _logger.LogInformation($"✅ STEP 2 COMPLETED: Signal saved to database for {watchlistSymbol.Symbol}");
+
+                                    // 📱 STEP 3: Format Message
+                                    _logger.LogInformation($"📝 STEP 3: Formatting message for {watchlistSymbol.Symbol}...");
+                                    var message = FormatHybridMessage(signal, analysisMode, watchlistSymbol.Market ?? "US");
+                                    _logger.LogInformation($"✅ STEP 3 COMPLETED: Message formatted for {watchlistSymbol.Symbol} ({message.Length} chars)");
+
+                                    // 📤 STEP 4: Send to Telegram
+                                    _logger.LogInformation($"📤 STEP 4: Sending message to Telegram for {watchlistSymbol.Symbol}...");
+
+                                    // DEBUG: Log messaggio (primi 200 chars)
+                                    _logger.LogDebug($"Message preview: {message.Substring(0, Math.Min(200, message.Length))}...");
+
+                                    await _telegram.SendMessageAsync(message);
+                                    _logger.LogInformation($"✅ STEP 4 COMPLETED: Message sent to Telegram for {watchlistSymbol.Symbol}");
+
+                                    // 🏷️ STEP 5: Mark as Sent
+                                    _logger.LogInformation($"🏷️ STEP 5: Marking signal as sent for {watchlistSymbol.Symbol}...");
+                                    await _signalFilter.MarkSignalAsSentAsync(signal.Id);
+                                    _logger.LogInformation($"✅ STEP 5 COMPLETED: Signal marked as sent for {watchlistSymbol.Symbol}");
+
+                                    signalsSentCount++;
+                                    _logger.LogInformation($"🚀 SUCCESS: {analysisMode} signal SENT for {watchlistSymbol.Symbol}: " +
+                                        $"{signal.Type} ({signal.Confidence}%) - COMPLETE PIPELINE!");
                                 }
+                                catch (Exception ex)
+                                {
+                                    _logger.LogError(ex, $"💥 PIPELINE FAILED at some step for {watchlistSymbol.Symbol}");
 
-                                await _mongo.SaveSignalAsync(signal);
-
-                                var message = FormatHybridMessage(signal, analysisMode, watchlistSymbol.Market ?? "US");
-                                await _telegram.SendMessageAsync(message);
-                                await _signalFilter.MarkSignalAsSentAsync(signal.Id);
-
-                                signalsSentCount++;
-                                _logger.LogInformation($"✅ TRADITIONAL signal sent for {watchlistSymbol.Symbol}: {signal.Type} ({signal.Confidence}%)");
+                                    // Log dettagliato dell'errore
+                                    _logger.LogError($"❌ Error Type: {ex.GetType().Name}");
+                                    _logger.LogError($"❌ Error Message: {ex.Message}");
+                                    if (ex.InnerException != null)
+                                    {
+                                        _logger.LogError($"❌ Inner Exception: {ex.InnerException.Message}");
+                                    }
+                                    _logger.LogError($"❌ Stack Trace: {ex.StackTrace}");
+                                }
                             }
                             else
                             {
-                                var reason = !shouldSend ?
-                                    $"below {analysisMode} threshold ({signal.Confidence}% < {_smartMarketHours.GetConfidenceThreshold(analysisMode)}%)" :
-                                    "failed enhanced quality filters";
-
-                                _logger.LogDebug($"⏸️ Signal for {watchlistSymbol.Symbol} skipped: {reason}");
+                                _logger.LogInformation($"⏸️ Signal for {watchlistSymbol.Symbol} below {analysisMode} threshold " +
+                                    $"({signal.Confidence}% < {threshold}%)");
                             }
                         }
 
