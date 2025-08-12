@@ -1,3 +1,4 @@
+using MongoDB.Driver;
 using PortfolioSignalWorker.Models;
 using PortfolioSignalWorker.Services;
 using static PortfolioSignalWorker.Services.SmartMarketHoursService;
@@ -36,43 +37,26 @@ public class Worker : BackgroundService
         _logger = logger;
     }
 
+    // 🔧 AGGIUNGI questo debug logging nel Worker.cs - metodo ExecuteAsync
+    // SOSTITUISCI la sezione di debug con questa versione più dettagliata:
+
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
-        _logger.LogInformation("🚀 Worker started with DYNAMIC VOLATILE STRATEGY + Risk Management");
-
+        _logger.LogInformation("🚀 Worker started with HYBRID MARKET STRATEGY + Risk Management + Breakout Detection");
+        await DebugWatchlistStatus();
         // Initialize watchlist on first run
         var watchlistCount = await _mongo.GetWatchlistCount();
+        _logger.LogInformation($"📊 Current watchlist count: {watchlistCount}");
+
         if (watchlistCount == 0)
         {
             _logger.LogInformation("No watchlist found, initializing...");
             await _symbolSelection.InitializeWatchlist();
 
-            // 🚀 NUOVO: Popola simboli volatili dopo inizializzazione
-            _logger.LogInformation("💥 Populating volatile symbols...");
-            await _symbolSelection.PopulateVolatileSymbols();
+            // Re-check after initialization
+            watchlistCount = await _mongo.GetWatchlistCount();
+            _logger.LogInformation($"📊 Watchlist count after initialization: {watchlistCount}");
         }
-        else
-        {
-            // 🚀 NUOVO: Anche se watchlist esiste, esegui migrazione per volatilità
-            _logger.LogInformation("🔄 Checking for database migration needs...");
-            await _symbolSelection.MigrateWatchlistForVolatility();
-
-            // 🚀 NUOVO: E popola simboli volatili SENZA re-inizializzare (evita duplicati)
-            _logger.LogInformation("💥 Ensuring volatile symbols are present...");
-            try
-            {
-                await _symbolSelection.PopulateVolatileSymbols();
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex, "Error populating volatile symbols - continuing without them");
-                // Non interrompere l'applicazione, continua senza simboli volatili
-            }
-        }
-
-        // 🚀 NUOVO: Forza classificazione volatilità all'avvio
-        _logger.LogInformation("📊 Initializing volatility classification...");
-        await InitializeVolatilityClassification();
 
         // Log mercati all'avvio
         _smartMarketHours.LogCurrentMarketStatus();
@@ -81,32 +65,70 @@ public class Worker : BackgroundService
         {
             try
             {
-                // Get symbols due for analysis con PRIORITIZZAZIONE
+                // 🔍 DEBUG: Get symbols due for analysis with detailed logging
+                _logger.LogInformation("🔍 Checking for symbols due for analysis...");
                 var allSymbolsDue = await _symbolSelection.GetSymbolsDueForAnalysis();
 
-                // 🚀 SMART PRIORITIZATION: Ordina per volatilità e breakout potential
-                var prioritizedSymbols = allSymbolsDue
-                    .OrderByDescending(s => s.VolatilityLevel) // Esplosivi prima
-                    .ThenByDescending(s => s.IsBreakoutCandidate) // Breakout candidates
-                    .ThenByDescending(s => s.ConsecutiveHighVolDays) // Giorni consecutivi volatili
-                    .ThenBy(s => s.NextAnalysis) // Poi per timing normale
-                    .ToList();
+                _logger.LogInformation($"📊 Total symbols due for analysis: {allSymbolsDue.Count}");
+
+                if (allSymbolsDue.Count == 0)
+                {
+                    _logger.LogWarning("❌ No symbols due for analysis! Checking reasons:");
+
+                    // Debug: Check total watchlist
+                    var totalWatchlist = await _symbolSelection.GetWatchlistSummary();
+                    _logger.LogInformation($"📋 Total active symbols in watchlist: {totalWatchlist.Count}");
+
+                    if (totalWatchlist.Count == 0)
+                    {
+                        _logger.LogError("🚨 CRITICAL: Watchlist is EMPTY! Re-initializing...");
+                        await _symbolSelection.InitializeWatchlist();
+                    }
+                    else
+                    {
+                        // Log some examples of symbols and their next analysis times
+                        var now = DateTime.UtcNow;
+                        var nextAnalysisTimes = totalWatchlist.Take(5)
+                            .Select(s => new {
+                                s.Symbol,
+                                s.NextAnalysis,
+                                MinutesUntil = (s.NextAnalysis - now).TotalMinutes
+                            })
+                            .ToList();
+
+                        _logger.LogInformation("📋 Sample symbols and their next analysis times:");
+                        foreach (var symbol in nextAnalysisTimes)
+                        {
+                            _logger.LogInformation($"  {symbol.Symbol}: {symbol.NextAnalysis:HH:mm:ss} (in {symbol.MinutesUntil:F1} min)");
+                        }
+                    }
+
+                    // Wait longer before next check
+                    await Task.Delay(TimeSpan.FromMinutes(1), stoppingToken);
+                    continue;
+                }
+
+                // Log symbols due for analysis
+                _logger.LogInformation($"📋 Symbols due: {string.Join(", ", allSymbolsDue.Take(5).Select(s => s.Symbol))}");
 
                 // ===== HYBRID FILTERING: Filtra per modalità di analisi =====
-                var symbolsToProcess = new List<(WatchlistSymbol symbol, AnalysisMode mode)>(); // 🔧 FIX: Specificato come tupla a 2 elementi
+                var symbolsToProcess = new List<(WatchlistSymbol symbol, AnalysisMode mode)>();
                 var skippedCount = 0;
 
                 foreach (var symbol in allSymbolsDue)
                 {
                     var analysisMode = _smartMarketHours.GetAnalysisMode(symbol.Symbol);
 
+                    _logger.LogDebug($"🔍 {symbol.Symbol}: Analysis mode = {analysisMode}");
+
                     if (analysisMode == AnalysisMode.Skip)
                     {
                         skippedCount++;
+                        _logger.LogDebug($"⏭️ Skipping {symbol.Symbol}: {analysisMode}");
                         continue;
                     }
 
-                    symbolsToProcess.Add((symbol, analysisMode)); // 🔧 FIX: Tupla a 2 elementi
+                    symbolsToProcess.Add((symbol, analysisMode));
                 }
 
                 _logger.LogInformation($"📊 HYBRID ANALYSIS: Processing {symbolsToProcess.Count} symbols " +
@@ -122,78 +144,106 @@ public class Worker : BackgroundService
                     _logger.LogInformation($"  {mode.Key}: {mode.Value} symbols");
                 }
 
+                // ===== DEBUG: Se ancora 0 symbols, analizza perché =====
+                if (symbolsToProcess.Count == 0)
+                {
+                    _logger.LogWarning($"⚠️ All {allSymbolsDue.Count} symbols were skipped due to market hours analysis");
+
+                    // Log detailed market status for first few symbols
+                    foreach (var symbol in allSymbolsDue.Take(3))
+                    {
+                        var mode = _smartMarketHours.GetAnalysisMode(symbol.Symbol);
+                        var status = _smartMarketHours.GetModeDescription(mode, symbol.Symbol);
+                        _logger.LogInformation($"  {symbol.Symbol}: {mode} - {status}");
+                    }
+
+                    // Check if it's a weekend or very late night
+                    var now = DateTime.UtcNow;
+                    var dayOfWeek = now.DayOfWeek;
+                    var hour = now.Hour;
+
+                    if (dayOfWeek == DayOfWeek.Saturday || dayOfWeek == DayOfWeek.Sunday)
+                    {
+                        _logger.LogInformation("📅 It's weekend - markets are closed, symbols skipped is normal");
+                    }
+                    else if (hour < 6 || hour > 22) // Very early or very late UTC
+                    {
+                        _logger.LogInformation($"🕐 It's {hour}:00 UTC - outside trading hours, symbols skipped is normal");
+                    }
+                    else
+                    {
+                        _logger.LogWarning("⚠️ Symbols skipped during potential trading hours - check SmartMarketHoursService logic");
+                    }
+                }
+
                 // ===== PROCESS SYMBOLS CON MODALITÀ SPECIFICA =====
                 var processedCount = 0;
                 var signalsSentCount = 0;
 
-                foreach (var (watchlistSymbol, analysisMode) in symbolsToProcess) // 🔧 FIX: Ora funziona con 2 elementi
+                foreach (var (watchlistSymbol, analysisMode) in symbolsToProcess)
                 {
                     try
                     {
                         var modeDescription = _smartMarketHours.GetModeDescription(analysisMode, watchlistSymbol.Symbol);
-                        _logger.LogDebug($"Analyzing {watchlistSymbol.Symbol} - {modeDescription}");
+                        _logger.LogInformation($"🔍 Analyzing {watchlistSymbol.Symbol} - {modeDescription}");
 
                         // Get indicators
                         var indicator = await _yahooFinance.GetIndicatorsAsync(watchlistSymbol.Symbol);
+                        _logger.LogDebug($"📊 {watchlistSymbol.Symbol}: Price=${indicator.Price:F2}, RSI={indicator.RSI:F1}, Volume={indicator.Volume:N0}");
 
-                        // 🚀 NUOVO: Analisi breakout parallela
+                        // 🚀 Breakout analysis
                         var breakoutSignal = await _breakoutDetection.AnalyzeBreakoutPotentialAsync(watchlistSymbol.Symbol);
+                        if (breakoutSignal != null)
+                        {
+                            _logger.LogDebug($"🎯 {watchlistSymbol.Symbol}: Breakout {breakoutSignal.BreakoutType} (Score: {breakoutSignal.BreakoutScore}/100)");
+                        }
 
                         // Analyze for traditional signals
                         var signal = await _signalFilter.AnalyzeSignalAsync(watchlistSymbol.Symbol, indicator);
+                        if (signal != null)
+                        {
+                            _logger.LogDebug($"📈 {watchlistSymbol.Symbol}: Traditional signal {signal.Type} (Confidence: {signal.Confidence}%)");
+                        }
 
                         // Save indicator
                         await _mongo.SaveIndicatorAsync(indicator);
 
-                        // 🚀 NUOVO: Gestione breakout signals con MongoDB
+                        // 🚀 Gestione breakout signals
                         if (breakoutSignal != null && ShouldSendBreakoutSignal(breakoutSignal, analysisMode))
                         {
-                            _logger.LogInformation($"🎯 Breakout signal detected for {watchlistSymbol.Symbol}: {breakoutSignal.BreakoutType} ({breakoutSignal.BreakoutScore}/100)");
+                            _logger.LogInformation($"🎯 Processing breakout signal for {watchlistSymbol.Symbol}: {breakoutSignal.BreakoutType} ({breakoutSignal.BreakoutScore}/100)");
 
-                            // 1. Salva breakout signal in MongoDB
                             var breakoutDocument = MongoService.ConvertToDocument(breakoutSignal);
                             await _mongo.SaveBreakoutSignalAsync(breakoutDocument);
 
-                            // 2. Convert to TradingSignal for risk management
                             var breakoutTradingSignal = ConvertBreakoutToTradingSignal(breakoutSignal);
-
-                            // 3. Enhance con risk management
                             breakoutTradingSignal = await _riskManagement.EnhanceSignalWithRiskManagement(breakoutTradingSignal);
 
-                            // 4. Final validation
                             if (await _signalFilter.ValidateSignalComprehensiveAsync(breakoutTradingSignal))
                             {
-                                // 5. Save trading signal
                                 await _mongo.SaveSignalAsync(breakoutTradingSignal);
-
-                                // 6. Link breakout signal to trading signal
                                 await _mongo.MarkBreakoutSignalAsSentAsync(breakoutDocument.Id, breakoutTradingSignal.Id);
 
-                                // 7. Send breakout message
                                 var breakoutMessage = FormatBreakoutMessage(breakoutSignal, breakoutTradingSignal, analysisMode, watchlistSymbol.Market ?? "US");
                                 await _telegram.SendMessageAsync(breakoutMessage);
                                 await _signalFilter.MarkSignalAsSentAsync(breakoutTradingSignal.Id);
 
                                 signalsSentCount++;
-                                _logger.LogInformation($"✅ {analysisMode} BREAKOUT signal sent for {watchlistSymbol.Symbol}: " +
-                                    $"{breakoutSignal.BreakoutType} ({breakoutSignal.BreakoutScore}/100) - Signal ID: {breakoutTradingSignal.Id}");
-
-                                // Skip traditional signal if breakout signal sent
+                                _logger.LogInformation($"✅ BREAKOUT signal sent for {watchlistSymbol.Symbol}");
                                 continue;
                             }
                             else
                             {
-                                _logger.LogWarning($"⚠️ Breakout signal validation failed for {watchlistSymbol.Symbol} - not sent");
+                                _logger.LogWarning($"⚠️ Breakout signal validation failed for {watchlistSymbol.Symbol}");
                             }
                         }
 
-                        // Traditional signal processing (existing code)
+                        // Traditional signal processing
                         if (signal != null)
                         {
-                            // Validazione pre-invio
-                            if (!await _signalFilter.ValidateSignalComprehensiveAsync(signal)) // 🔧 FIX: Usa il metodo corretto
+                            if (!await _signalFilter.ValidateSignalComprehensiveAsync(signal))
                             {
-                                _logger.LogWarning($"⚠️ Signal pre-validation FAILED for {watchlistSymbol.Symbol} - skipping");
+                                _logger.LogDebug($"⚠️ Traditional signal validation failed for {watchlistSymbol.Symbol}");
                                 continue;
                             }
 
@@ -204,9 +254,9 @@ public class Worker : BackgroundService
                             {
                                 signal = await _riskManagement.EnhanceSignalWithRiskManagement(signal);
 
-                                if (!await _signalFilter.ValidateSignalComprehensiveAsync(signal)) // 🔧 FIX: Usa il metodo corretto
+                                if (!await _signalFilter.ValidateSignalComprehensiveAsync(signal))
                                 {
-                                    _logger.LogError($"🚨 Signal post-risk-management validation FAILED for {watchlistSymbol.Symbol}");
+                                    _logger.LogWarning($"🚨 Signal post-risk-management validation failed for {watchlistSymbol.Symbol}");
                                     continue;
                                 }
 
@@ -217,8 +267,7 @@ public class Worker : BackgroundService
                                 await _signalFilter.MarkSignalAsSentAsync(signal.Id);
 
                                 signalsSentCount++;
-                                _logger.LogInformation($"✅ {analysisMode} traditional signal sent for {watchlistSymbol.Symbol}: " +
-                                    $"{signal.Type} ({signal.Confidence}%)");
+                                _logger.LogInformation($"✅ TRADITIONAL signal sent for {watchlistSymbol.Symbol}: {signal.Type} ({signal.Confidence}%)");
                             }
                             else
                             {
@@ -237,10 +286,10 @@ public class Worker : BackgroundService
 
                         processedCount++;
 
-                        // Dynamic rate limiting
+                        // Rate limiting
                         var delay = analysisMode switch
                         {
-                            AnalysisMode.FullAnalysis => 800,      // Slightly slower for breakout analysis
+                            AnalysisMode.FullAnalysis => 800,
                             AnalysisMode.PreMarketWatch => 1000,
                             AnalysisMode.OffHoursMonitor => 1200,
                             _ => 1000
@@ -255,14 +304,157 @@ public class Worker : BackgroundService
                 }
 
                 _logger.LogInformation($"📈 Cycle completed: {processedCount} processed, {signalsSentCount} signals sent");
+
+                // Daily optimization (at midnight)
+                if (DateTime.Now.Hour == 0 && DateTime.Now.Minute < 5)
+                {
+                    _logger.LogInformation("🔄 Starting daily watchlist optimization...");
+                    await _symbolSelection.OptimizeWatchlist();
+                    _smartMarketHours.LogCurrentMarketStatus();
+                }
+
+                // Wait before next cycle
+                var anyMarketOpen = symbolsToProcess.Any(x => x.mode == AnalysisMode.FullAnalysis);
+                var waitTime = anyMarketOpen ? TimeSpan.FromMinutes(5) : TimeSpan.FromMinutes(15);
+
+                _logger.LogDebug($"💤 Waiting {waitTime.TotalMinutes} minutes before next cycle");
+                await Task.Delay(waitTime, stoppingToken);
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "Error in volatile hybrid worker loop");
+                _logger.LogError(ex, "Error in hybrid worker loop");
                 await Task.Delay(TimeSpan.FromMinutes(2), stoppingToken);
             }
         }
     }
+
+    // 🔍 AGGIUNGI questo metodo temporaneo al Worker.cs per debug:
+
+    // Metodo temporaneo per debug - chiamalo una volta per controllare la situazione
+    private async Task DebugWatchlistStatus()
+    {
+        _logger.LogInformation("🔍 === DEBUG WATCHLIST STATUS ===");
+
+        try
+        {
+            // 1. Check MongoDB collections
+            var database = _mongo.GetDatabase();
+
+            // Check WatchlistSymbols collection
+            var watchlistCollection = database.GetCollection<WatchlistSymbol>("WatchlistSymbols");
+            var totalWatchlist = await watchlistCollection.CountDocumentsAsync(FilterDefinition<WatchlistSymbol>.Empty);
+            var activeWatchlist = await watchlistCollection.CountDocumentsAsync(
+                Builders<WatchlistSymbol>.Filter.Eq(x => x.IsActive, true));
+
+            _logger.LogInformation($"📊 WatchlistSymbols collection: {totalWatchlist} total, {activeWatchlist} active");
+
+            // Check CoreSymbols collection
+            var coreCollection = database.GetCollection<CoreSymbol>("CoreSymbols");
+            var totalCore = await coreCollection.CountDocumentsAsync(FilterDefinition<CoreSymbol>.Empty);
+            var activeCore = await coreCollection.CountDocumentsAsync(
+                Builders<CoreSymbol>.Filter.Eq(x => x.IsActive, true));
+
+            _logger.LogInformation($"📊 CoreSymbols collection: {totalCore} total, {activeCore} active");
+
+            // Check RotationSymbols collection
+            var rotationCollection = database.GetCollection<RotationSymbol>("RotationSymbols");
+            var totalRotation = await rotationCollection.CountDocumentsAsync(FilterDefinition<RotationSymbol>.Empty);
+            var activeRotation = await rotationCollection.CountDocumentsAsync(
+                Builders<RotationSymbol>.Filter.Eq(x => x.IsActive, true));
+
+            _logger.LogInformation($"📊 RotationSymbols collection: {totalRotation} total, {activeRotation} active");
+
+            // 2. If no symbols in core/rotation, the problem is here
+            if (activeCore == 0 && activeRotation == 0)
+            {
+                _logger.LogError("🚨 CRITICAL: No active symbols in CoreSymbols AND RotationSymbols collections!");
+                _logger.LogError("💡 SOLUTION: Run the MongoDB insert script from insertsimbolMongo.txt");
+                _logger.LogError("📋 You need to populate the MongoDB collections manually with symbols");
+                return;
+            }
+
+            // 3. If core/rotation exist but watchlist is empty, initialization failed
+            if ((activeCore > 0 || activeRotation > 0) && activeWatchlist == 0)
+            {
+                _logger.LogWarning("⚠️ Symbols exist in source collections but watchlist is empty");
+                _logger.LogInformation("🔄 Attempting to initialize watchlist...");
+
+                try
+                {
+                    await _symbolSelection.InitializeWatchlist();
+
+                    // Re-check
+                    var newWatchlistCount = await watchlistCollection.CountDocumentsAsync(
+                        Builders<WatchlistSymbol>.Filter.Eq(x => x.IsActive, true));
+                    _logger.LogInformation($"✅ Watchlist initialization completed: {newWatchlistCount} symbols added");
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogError(ex, "❌ Watchlist initialization failed");
+                }
+            }
+
+            // 4. Check sample symbols and their NextAnalysis times
+            if (activeWatchlist > 0)
+            {
+                var sampleSymbols = await watchlistCollection
+                    .Find(Builders<WatchlistSymbol>.Filter.Eq(x => x.IsActive, true))
+                    .Limit(10)
+                    .ToListAsync();
+
+                _logger.LogInformation($"📋 Sample active symbols ({sampleSymbols.Count}):");
+
+                var now = DateTime.UtcNow;
+                foreach (var symbol in sampleSymbols)
+                {
+                    var minutesUntil = (symbol.NextAnalysis - now).TotalMinutes;
+                    var isDue = symbol.NextAnalysis <= now;
+
+                    _logger.LogInformation($"  {symbol.Symbol}: NextAnalysis={symbol.NextAnalysis:HH:mm:ss} " +
+                        $"({minutesUntil:F1}min) {(isDue ? "✅ DUE" : "⏰ WAITING")}");
+                }
+
+                // Check how many are due NOW
+                var symbolsDue = await watchlistCollection.CountDocumentsAsync(
+                    Builders<WatchlistSymbol>.Filter.And(
+                        Builders<WatchlistSymbol>.Filter.Eq(x => x.IsActive, true),
+                        Builders<WatchlistSymbol>.Filter.Lte(x => x.NextAnalysis, now)
+                    ));
+
+                _logger.LogInformation($"📊 Symbols due for analysis RIGHT NOW: {symbolsDue}");
+            }
+
+            // 5. Check market hours status
+            _logger.LogInformation("🕐 Market Hours Status:");
+            _smartMarketHours.LogCurrentMarketStatus();
+
+            // 6. Test a few symbols with market hours logic
+            if (activeWatchlist > 0)
+            {
+                var testSymbols = await watchlistCollection
+                    .Find(Builders<WatchlistSymbol>.Filter.Eq(x => x.IsActive, true))
+                    .Limit(3)
+                    .ToListAsync();
+
+                _logger.LogInformation("🧪 Market Hours Test for sample symbols:");
+                foreach (var symbol in testSymbols)
+                {
+                    var analysisMode = _smartMarketHours.GetAnalysisMode(symbol.Symbol);
+                    var description = _smartMarketHours.GetModeDescription(analysisMode, symbol.Symbol);
+
+                    _logger.LogInformation($"  {symbol.Symbol}: {analysisMode} - {description}");
+                }
+            }
+
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error in debug watchlist status");
+        }
+
+        _logger.LogInformation("🔍 === END DEBUG WATCHLIST STATUS ===");
+    }
+     
 
     private bool ShouldSendBreakoutSignal(BreakoutSignal breakoutSignal, AnalysisMode analysisMode)
     {
