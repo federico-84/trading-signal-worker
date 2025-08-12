@@ -161,46 +161,6 @@ namespace PortfolioSignalWorker.Services
             };
         }
 
-        public async Task<string> GetCurrencySymbolAsync(string currencyCode)
-        {
-            return currencyCode.ToUpper() switch
-            {
-                "EUR" => "€",
-                "USD" => "$",
-                "GBP" => "£",
-                "CHF" => "CHF",
-                "JPY" => "¥",
-                "CAD" => "CAD$",
-                "AUD" => "AUD$",
-                _ => currencyCode
-            };
-        }
-
-        // Metodo per refresh manuale delle rate (utile per testing)
-        public async Task RefreshExchangeRatesAsync()
-        {
-            _logger.LogInformation("Refreshing exchange rates manually...");
-            _exchangeRateCache.Clear();
-            _lastCacheUpdate = DateTime.MinValue;
-
-            var currencies = new[] { "USD", "GBP", "CHF", "JPY", "CAD", "AUD" };
-
-            foreach (var currency in currencies)
-            {
-                try
-                {
-                    await GetExchangeRateAsync(currency, "EUR");
-                    await Task.Delay(200); // Rate limiting
-                }
-                catch (Exception ex)
-                {
-                    _logger.LogWarning($"Failed to refresh rate for {currency}: {ex.Message}");
-                }
-            }
-
-            _logger.LogInformation($"Exchange rates refreshed. Cache contains {_exchangeRateCache.Count} rates.");
-        }
-
         public void Dispose()
         {
             _httpClient?.Dispose();

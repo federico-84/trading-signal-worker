@@ -159,37 +159,6 @@ namespace PortfolioSignalWorker.Services
             return nextOpen - localTime;
         }
 
-        public bool ShouldAnalyzeSymbol(string symbol)
-        {
-            var market = GetMarketFromSymbol(symbol);
-            var now = DateTime.UtcNow;
-
-            // Always analyze US stocks during US hours
-            if (market == MarketRegion.US && IsUSMarketOpen(now))
-                return true;
-
-            // Always analyze EU stocks during EU hours  
-            if (market == MarketRegion.Europe && IsEuropeanMarketOpen(now, symbol))
-                return true;
-
-            // During off-hours, analyze less frequently
-            // US stocks: Only analyze if less than 2 hours since market close
-            if (market == MarketRegion.US)
-            {
-                var timeUntilOpen = GetTimeUntilUSMarketOpen(now);
-                return timeUntilOpen.TotalHours <= 2 || timeUntilOpen.TotalHours >= 22; // 2 hours after close or 2 hours before open
-            }
-
-            // EU stocks: Only analyze if less than 2 hours since market close
-            if (market == MarketRegion.Europe)
-            {
-                var timeUntilOpen = GetTimeUntilEuropeanMarketOpen(now, symbol);
-                return timeUntilOpen.TotalHours <= 2 || timeUntilOpen.TotalHours >= 22;
-            }
-
-            return true; // Default to always analyze
-        }
-
         public string GetMarketStatus(string symbol)
         {
             var isOpen = IsMarketOpen(symbol);
@@ -203,35 +172,6 @@ namespace PortfolioSignalWorker.Services
                 return $"{market} Market CLOSED - Opens in {timeUntilOpen.Hours}h {timeUntilOpen.Minutes}m";
 
             return $"{market} Market CLOSED - Opens {timeUntilOpen.Days}d {timeUntilOpen.Hours}h";
-        }
-
-        public List<string> GetCurrentlyTradingMarkets()
-        {
-            var tradingMarkets = new List<string>();
-            var now = DateTime.UtcNow;
-
-            if (IsUSMarketOpen(now))
-                tradingMarkets.Add("US (NYSE/NASDAQ)");
-
-            // Check each European market
-            var europeanMarkets = new[]
-            {
-                ("Milan", ".MI"),
-                ("Amsterdam", ".AS"),
-                ("Frankfurt", ".DE"),
-                ("Paris", ".PA"),
-                ("Swiss", ".SW"),
-                ("London", ".L"),
-                ("Madrid", ".MC")
-            };
-
-            foreach (var (name, suffix) in europeanMarkets)
-            {
-                if (IsEuropeanMarketOpen(now, $"TEST{suffix}"))
-                    tradingMarkets.Add($"EU ({name})");
-            }
-
-            return tradingMarkets;
         }
     }
 

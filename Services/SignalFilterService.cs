@@ -102,66 +102,6 @@ namespace PortfolioSignalWorker.Services
             return count > 0;
         }
 
-        // Metodo per statistiche specifiche breakout
-        public async Task<BreakoutValidationStats> GetBreakoutValidationStatsAsync(DateTime fromDate)
-        {
-            var breakoutSignals = await _signalCollection
-                .Find(Builders<TradingSignal>.Filter.And(
-                    Builders<TradingSignal>.Filter.Gte(x => x.CreatedAt, fromDate),
-                    Builders<TradingSignal>.Filter.Regex(x => x.Reason, "BREAKOUT")
-                ))
-                .ToListAsync();
-
-            var stats = new BreakoutValidationStats
-            {
-                TotalBreakoutSignals = breakoutSignals.Count,
-                ValidBreakoutSignals = 0,
-                InvalidBreakoutSignals = 0,
-                AverageConfidence = 0,
-                BreakoutTypeDistribution = new Dictionary<string, int>()
-            };
-
-            if (breakoutSignals.Any())
-            {
-                stats.AverageConfidence = breakoutSignals.Average(s => s.Confidence);
-
-                foreach (var signal in breakoutSignals)
-                {
-                    if (ValidateBreakoutSignal(signal))
-                    {
-                        stats.ValidBreakoutSignals++;
-                    }
-                    else
-                    {
-                        stats.InvalidBreakoutSignals++;
-                    }
-
-                    // Extract breakout type from reason
-                    var breakoutType = ExtractBreakoutTypeFromReason(signal.Reason);
-                    if (!string.IsNullOrEmpty(breakoutType))
-                    {
-                        if (!stats.BreakoutTypeDistribution.ContainsKey(breakoutType))
-                            stats.BreakoutTypeDistribution[breakoutType] = 0;
-
-                        stats.BreakoutTypeDistribution[breakoutType]++;
-                    }
-                }
-            }
-
-            return stats;
-        }
-
-        private string ExtractBreakoutTypeFromReason(string reason)
-        {
-            if (string.IsNullOrEmpty(reason)) return "Unknown";
-
-            if (reason.Contains("IMMINENT")) return "Imminent";
-            if (reason.Contains("PROBABLE")) return "Probable";
-            if (reason.Contains("POSSIBLE")) return "Possible";
-
-            return "Other";
-        }
-
         // Metodo combinato per validazione completa (tradizionale + breakout)
         public async Task<bool> ValidateSignalComprehensiveAsync(TradingSignal signal)
         {

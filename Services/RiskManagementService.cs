@@ -95,9 +95,8 @@ namespace PortfolioSignalWorker.Services
                 // 4. Validazione critica
                 if (!ValidateRiskLevels(signal))
                 {
-                    _logger.LogError($"Risk levels validation FAILED for {signal.Symbol} - applying safe defaults");
-                    await ApplyDefaultRiskLevelsInEuro(signal, currentPriceEUR);
-                    return signal;
+                    _logger.LogError($"🚨 SIGNAL REJECTED for {signal.Symbol} - invalid risk/reward setup");
+                    throw new InvalidOperationException($"Signal validation failed for {signal.Symbol}"); // ❌ RIGETTA!
                 }
 
                 // 5. Calcola position sizing in EURO
@@ -437,21 +436,37 @@ namespace PortfolioSignalWorker.Services
                 validationErrors.Add($"Risk/Reward ratio {signal.RiskRewardRatio:F2} fuori range [0.1-10]");
             }
 
-            // 5. Supporto deve essere sotto prezzo
-            if (signal.SupportLevel >= signal.Price)
+            // ===== 🚨 AGGIUNGI QUESTI DUE CHECK QUI =====
+
+            // 4.5 Entry price deve essere SOTTO la resistenza (lascia spazio per crescere)
+            if (signal.ResistanceLevel > 0 && signal.Price >= signal.ResistanceLevel * 0.98)
             {
-                validationErrors.Add($"Support {signal.SupportLevel:F2} >= Price {signal.Price:F2}");
+                validationErrors.Add($"Entry price €{signal.Price:F2} >= Resistance €{signal.ResistanceLevel:F2} * 0.98 - troppo vicino/sopra resistenza");
             }
 
-            // 6. Resistenza deve essere sopra prezzo
-            if (signal.ResistanceLevel <= signal.Price)
+            // 4.6 Entry price deve essere SOPRA il supporto (non in caduta libera)
+            if (signal.SupportLevel > 0 && signal.Price <= signal.SupportLevel * 1.02)
             {
-                validationErrors.Add($"Resistance {signal.ResistanceLevel:F2} <= Price {signal.Price:F2}");
+                validationErrors.Add($"Entry price €{signal.Price:F2} <= Support €{signal.SupportLevel:F2} * 1.02 - troppo vicino/sotto supporto");
+            }
+
+            // ===== FINE AGGIUNTE =====
+
+            // 5. Supporto deve essere sotto prezzo (check tecnico)
+            if (signal.SupportLevel > 0 && signal.SupportLevel >= signal.Price)
+            {
+                validationErrors.Add($"Support {signal.SupportLevel:F2} >= Price {signal.Price:F2} - configurazione tecnica invalida");
+            }
+
+            // 6. Resistenza deve essere sopra prezzo (check tecnico)  
+            if (signal.ResistanceLevel > 0 && signal.ResistanceLevel <= signal.Price)
+            {
+                validationErrors.Add($"Resistance {signal.ResistanceLevel:F2} <= Price {signal.Price:F2} - configurazione tecnica invalida");
             }
 
             if (validationErrors.Any())
             {
-                _logger.LogError($"VALIDATION ERRORS for {signal.Symbol}:");
+                _logger.LogError($"🚨 VALIDATION ERRORS for {signal.Symbol}:");
                 foreach (var error in validationErrors)
                 {
                     _logger.LogError($"  ❌ {error}");
@@ -614,8 +629,6 @@ namespace PortfolioSignalWorker.Services
             }
         }
 
-         
-
         private double GetDynamicStopLossPercent(double confidence)
         {
             return confidence switch
@@ -638,36 +651,6 @@ namespace PortfolioSignalWorker.Services
                 >= 60 => 10.0,
                 _ => 8.0
             };
-        }
-
-        private (int shares, double value, double maxRisk, double potentialGain) CalculatePositionSizing(
-            double currentPrice,
-            double stopLoss)
-        {
-            var riskPerShare = Math.Abs(currentPrice - stopLoss);
-            var maxRiskAmount = _riskParams.PortfolioValue * (_riskParams.MaxPositionSizePercent / 100);
-
-            var suggestedShares = riskPerShare > 0 ? (int)(maxRiskAmount / riskPerShare) : 0;
-            var maxPositionValue = _riskParams.PortfolioValue * (_riskParams.MaxPositionSizePercent / 100);
-            var calculatedPositionValue = suggestedShares * currentPrice;
-
-            if (calculatedPositionValue > maxPositionValue)
-            {
-                suggestedShares = (int)(maxPositionValue / currentPrice);
-                calculatedPositionValue = suggestedShares * currentPrice;
-            }
-
-            // 🔧 FIX: Assicurati che suggestedShares sia almeno 1 se ha senso
-            if (suggestedShares == 0 && maxPositionValue > currentPrice)
-            {
-                suggestedShares = 1;
-                calculatedPositionValue = currentPrice;
-            }
-
-            var actualRisk = suggestedShares * riskPerShare;
-            var potentialGain = suggestedShares * (currentPrice * 0.15);
-
-            return (suggestedShares, calculatedPositionValue, actualRisk, potentialGain);
         }
 
         private async Task EnhanceWithMarketContext(TradingSignal signal)
