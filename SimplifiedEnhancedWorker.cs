@@ -180,10 +180,22 @@ public class SimplifiedEnhancedWorker : BackgroundService
         try
         {
             // 1. Get indicators with enhanced calculations
+            _logger.LogDebug($"🔍 Getting indicators for {watchlistSymbol.Symbol}");
             var indicator = await _yahooFinance.GetIndicatorsAsync(watchlistSymbol.Symbol);
+            _logger.LogDebug($"🔍 Got indicators: RSI={indicator.RSI:F1}, MACD={indicator.MACD_Histogram:F3}");
 
             // 2. Enhanced signal analysis with confluence
+            _logger.LogDebug($"🔍 Starting enhanced analysis for {watchlistSymbol.Symbol}");
             var signal = await _enhancedSignalFilter.AnalyzeEnhancedSignalAsync(watchlistSymbol.Symbol, indicator);
+
+            if (signal != null)
+            {
+                _logger.LogInformation($"🎯 Signal generated for {watchlistSymbol.Symbol}: {signal.Type} (Confidence: {signal.Confidence}%)");
+            }
+            else
+            {
+                _logger.LogDebug($"🔍 No signal generated for {watchlistSymbol.Symbol}");
+            }
 
             // 3. Save indicator data
             await _mongo.SaveIndicatorAsync(indicator);

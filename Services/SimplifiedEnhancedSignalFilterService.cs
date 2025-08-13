@@ -26,26 +26,41 @@ namespace PortfolioSignalWorker.Services
         {
             try
             {
-                // 1. Ottieni dati storici per analisi robusta (50 giorni sufficienti)
+                _logger.LogDebug($"🔍 Starting enhanced analysis for {symbol}");
+
+                // 1. Ottieni dati storici
                 var historicalData = await GetHistoricalDataAsync(symbol, 50);
+                _logger.LogInformation($"🔍 {symbol}: Retrieved {historicalData.Count} historical records");
 
                 if (historicalData.Count < 20)
                 {
-                    _logger.LogWarning($"Insufficient data for {symbol}: {historicalData.Count} days");
-                    return await GenerateBasicSignal(symbol, currentIndicator); // Fallback
+                    _logger.LogWarning($"🔍 {symbol}: Insufficient data ({historicalData.Count} days), using basic signal");
+                    return await GenerateBasicSignal(symbol, currentIndicator);
                 }
 
                 // 2. Calcola indicatori avanzati
+                _logger.LogDebug($"🔍 {symbol}: Calculating advanced indicators");
                 var enhancedIndicator = await CalculateAdvancedIndicators(symbol, currentIndicator, historicalData);
+                _logger.LogInformation($"🔍 {symbol}: Confluence score = {enhancedIndicator.ConfluenceScore}/100");
 
                 // 3. Analizza confluence e genera segnale
+                _logger.LogDebug($"🔍 {symbol}: Generating confluence-based signal");
                 var signal = await GenerateConfluenceBasedSignal(symbol, enhancedIndicator, historicalData);
+
+                if (signal != null)
+                {
+                    _logger.LogInformation($"🎯 {symbol}: Generated {signal.Type} signal with {signal.Confidence}% confidence");
+                }
+                else
+                {
+                    _logger.LogDebug($"🔍 {symbol}: No valid signal found");
+                }
 
                 return signal;
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "Error in enhanced analysis for {symbol}", symbol);
+                _logger.LogError(ex, "🚨 Error in enhanced analysis for {symbol}", symbol);
                 return await GenerateBasicSignal(symbol, currentIndicator);
             }
         }
