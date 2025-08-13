@@ -460,7 +460,7 @@ namespace PortfolioSignalWorker.Services
         // ALL OTHER METHODS REMAIN THE SAME (GetSymbolsDueForAnalysis, UpdateSymbolNextAnalysis, etc.)
         public async Task<List<WatchlistSymbol>> GetSymbolsDueForAnalysis()
         {
-            var now = DateTime.UtcNow;
+            var now = DateTime.UtcNow.AddHours(2);
             var filter = Builders<WatchlistSymbol>.Filter.And(
                 Builders<WatchlistSymbol>.Filter.Eq(x => x.IsActive, true),
                 Builders<WatchlistSymbol>.Filter.Lte(x => x.NextAnalysis, now)
