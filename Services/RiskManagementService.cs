@@ -584,108 +584,103 @@ namespace PortfolioSignalWorker.Services
             try
             {
                 // Usa più dati storici per contesto migliore
-                var historicalData = await _yahooFinance.GetHistoricalDataAsync(symbol, 120); // 120 giorni
+                var historicalData = await _yahooFinance.GetHistoricalDataAsync(symbol, 90);
                 var highs = historicalData["h"]?.ToObject<List<double>>() ?? new List<double>();
                 var lows = historicalData["l"]?.ToObject<List<double>>() ?? new List<double>();
                 var closes = historicalData["c"]?.ToObject<List<double>>() ?? new List<double>();
 
+                // 🔍 DEBUG: Log dati grezzi per capire il problema
+                _logger.LogInformation($"🔍 S/R RAW DATA for {symbol}:");
+                _logger.LogInformation($"   Data points: {highs.Count} highs, {lows.Count} lows, {closes.Count} closes");
+
+                if (highs.Count >= 5 && lows.Count >= 5 && closes.Count >= 5)
+                {
+                    _logger.LogInformation($"   Recent highs: {string.Join(", ", highs.Take(5).Select(h => h.ToString("F2")))}");
+                    _logger.LogInformation($"   Recent lows: {string.Join(", ", lows.Take(5).Select(l => l.ToString("F2")))}");
+                    _logger.LogInformation($"   Recent closes: {string.Join(", ", closes.Take(5).Select(c => c.ToString("F2")))}");
+                }
+
                 if (highs.Count < 30 || lows.Count < 30)
                 {
                     _logger.LogError($"🚨 Insufficient data for S/R calculation: {symbol} (got {highs.Count}, need 30+)");
-                    return (0, 0); // Fallimento = nessun livello
+                    return (0, 0);
                 }
 
                 var currentPrice = closes.First();
-                _logger.LogInformation($"🔍 S/R calculation for {symbol}: Current=€{currentPrice:F2}, analyzing {highs.Count} periods");
+                _logger.LogInformation($"💰 Current price for {symbol}: {currentPrice:F2}");
 
                 // 🔧 SUPPORTO: DEVE essere sotto current price
-                var validLows = lows.Where(low => low > 0 && low < currentPrice * 0.90).ToList(); // Almeno 10% sotto
+                var validLows = lows.Where(low => low > 0 && low < currentPrice * 0.95).ToList();
+
+                _logger.LogDebug($"🟢 Support candidates (< {currentPrice * 0.95:F2}): {validLows.Count}");
+                if (validLows.Count >= 3)
+                {
+                    _logger.LogDebug($"   Top candidates: {string.Join(", ", validLows.OrderByDescending(l => l).Take(3).Select(l => l.ToString("F2")))}");
+                }
 
                 double support = 0;
                 if (validLows.Any())
                 {
-                    // Trova supporti significativi (toccati più volte)
-                    var significantSupports = validLows
-                        .GroupBy(price => Math.Round(price, 1))
-                        .Where(group => group.Count() >= 2) // Almeno 2 tocchi
-                        .Select(group => group.Key)
-                        .OrderByDescending(price => price) // Più vicino al prezzo corrente
-                        .ToList();
-
-                    support = significantSupports.FirstOrDefault();
-                    if (support == 0)
-                    {
-                        support = validLows.Max(); // Supporto più alto tra quelli validi
-                    }
-
-                    _logger.LogDebug($"✅ Support found: €{support:F2} ({((support / currentPrice - 1) * 100):F1}% below current)");
+                    // Trova il supporto più alto tra quelli validi
+                    support = validLows.Max();
+                    _logger.LogInformation($"✅ Support found: {support:F2} ({((support / currentPrice - 1) * 100):F1}% below current)");
                 }
                 else
                 {
                     support = currentPrice * 0.85; // Fallback: 15% sotto
-                    _logger.LogWarning($"⚠️ No significant support found, using fallback: €{support:F2}");
+                    _logger.LogWarning($"⚠️ No valid support found, using fallback: {support:F2}");
                 }
 
                 // 🔧 RESISTENZA: DEVE essere sopra current price
-                var validHighs = highs.Where(high => high > 0 && high > currentPrice * 1.03).ToList(); // Almeno 3% sopra
+                var validHighs = highs.Where(high => high > 0 && high > currentPrice * 1.02).ToList();
+
+                _logger.LogDebug($"🔴 Resistance candidates (> {currentPrice * 1.02:F2}): {validHighs.Count}");
+                if (validHighs.Count >= 3)
+                {
+                    _logger.LogDebug($"   Top candidates: {string.Join(", ", validHighs.OrderBy(h => h).Take(3).Select(h => h.ToString("F2")))}");
+                }
 
                 double resistance = 0;
                 if (validHighs.Any())
                 {
-                    // Trova resistenze significative (toccate più volte)
-                    var significantResistances = validHighs
-                        .GroupBy(price => Math.Round(price, 1))
-                        .Where(group => group.Count() >= 2) // Almeno 2 tocchi = resistenza vera
-                        .Select(group => new { Price = group.Key, Count = group.Count() })
-                        .OrderBy(item => item.Price) // Inizia dalla più vicina
-                        .ToList();
-
-                    if (significantResistances.Any())
-                    {
-                        resistance = significantResistances.First().Price;
-                        var touchCount = significantResistances.First().Count;
-                        _logger.LogInformation($"✅ Significant resistance: €{resistance:F2} (touched {touchCount}x, {((resistance / currentPrice - 1) * 100):F1}% above)");
-                    }
-                    else
-                    {
-                        // Nessuna resistenza significativa = usa la più vicina
-                        resistance = validHighs.Min();
-                        _logger.LogWarning($"⚠️ No significant resistance, using nearest: €{resistance:F2}");
-                    }
+                    // Trova la resistenza più vicina (minima tra quelle valide)
+                    resistance = validHighs.Min();
+                    _logger.LogInformation($"✅ Resistance found: {resistance:F2} ({((resistance / currentPrice - 1) * 100):F1}% above current)");
                 }
                 else
                 {
-                    // 🚨 NESSUNA RESISTENZA VALIDA = TITOLO POTREBBE ESSERE A MASSIMI STORICI
+                    // 🚨 NESSUNA RESISTENZA VALIDA
                     var historicalMax = highs.Max();
+                    _logger.LogWarning($"⚠️ No valid resistance found. Historical max: {historicalMax:F2}, Current: {currentPrice:F2}");
 
-                    if (currentPrice >= historicalMax * 0.98) // Entro 2% del massimo storico
+                    if (currentPrice >= historicalMax * 0.95) // Entro 5% del massimo storico
                     {
-                        _logger.LogWarning($"🚨 {symbol} near/at historical max €{historicalMax:F2}, current €{currentPrice:F2}");
+                        _logger.LogWarning($"🚨 {symbol} near/at historical max - no clear resistance");
                         resistance = 0; // Nessuna resistenza chiara
                     }
                     else
                     {
                         resistance = currentPrice * 1.05; // Fallback conservativo: +5%
-                        _logger.LogWarning($"⚠️ No resistance found, using conservative fallback: €{resistance:F2}");
+                        _logger.LogWarning($"⚠️ Using conservative resistance fallback: {resistance:F2}");
                     }
                 }
 
-                // 🚨 VALIDATION FINALE CRITICA
+                // 🚨 VALIDATION FINALE CRITICA  
                 var errors = new List<string>();
 
-                if (support >= currentPrice)
+                if (support > 0 && support >= currentPrice)
                 {
-                    errors.Add($"Support €{support:F2} >= Current €{currentPrice:F2}");
+                    errors.Add($"Support {support:F2} >= Current {currentPrice:F2}");
                 }
 
                 if (resistance > 0 && resistance <= currentPrice)
                 {
-                    errors.Add($"Resistance €{resistance:F2} <= Current €{currentPrice:F2}");
+                    errors.Add($"Resistance {resistance:F2} <= Current {currentPrice:F2}");
                 }
 
                 if (support > 0 && resistance > 0 && support >= resistance)
                 {
-                    errors.Add($"Support €{support:F2} >= Resistance €{resistance:F2}");
+                    errors.Add($"Support {support:F2} >= Resistance {resistance:F2}");
                 }
 
                 if (errors.Any())
@@ -695,21 +690,26 @@ namespace PortfolioSignalWorker.Services
                     {
                         _logger.LogError($"   ❌ {error}");
                     }
-                    return (0, 0); // Ritorna livelli nulli invece di valori sbagliati
+
+                    // 🔍 DEBUG: Mostra più dati per capire il problema
+                    _logger.LogError($"🔍 DEBUG INFO:");
+                    _logger.LogError($"   All highs range: {highs.Min():F2} - {highs.Max():F2}");
+                    _logger.LogError($"   All lows range: {lows.Min():F2} - {lows.Max():F2}");
+                    _logger.LogError($"   Current price: {currentPrice:F2}");
+                    _logger.LogError($"   Valid highs count: {validHighs.Count}");
+                    _logger.LogError($"   Valid lows count: {validLows.Count}");
+
+                    return (0, 0); // Ritorna livelli nulli
                 }
 
                 // ✅ SUCCESS
-                _logger.LogInformation($"✅ Valid S/R for {symbol}: " +
-                    $"Support=€{support:F2} ({((support / currentPrice - 1) * 100):+F1}%), " +
-                    $"Resistance=€{resistance:F2} ({((resistance / currentPrice - 1) * 100):+F1}%), " +
-                    $"Current=€{currentPrice:F2}");
-
+                _logger.LogInformation($"✅ VALID S/R for {symbol}: Support={support:F2}, Resistance={resistance:F2}, Current={currentPrice:F2}");
                 return (support, resistance);
             }
             catch (Exception ex)
             {
                 _logger.LogError(ex, "❌ Error calculating S/R for {symbol}", symbol);
-                return (0, 0); // Fallimento = nessun livello
+                return (0, 0);
             }
         }
 
