@@ -42,13 +42,20 @@ namespace PortfolioSignalWorker.Services
 
         public double GetConfidenceThreshold(AnalysisMode mode)
         {
+            // 🔧 CONFIDENCE THRESHOLDS RILASSATI
             return mode switch
             {
-                AnalysisMode.FullAnalysis => 60.0,     // Solo quando serve davvero
-                AnalysisMode.PreMarketWatch => 80.0,   // Pre-market più selettivo
-                AnalysisMode.OffHoursMonitor => double.MaxValue, // 🚫 Mai inviare off-hours
-                AnalysisMode.Skip => double.MaxValue,
-                _ => 60.0
+                // VECCHIE SOGLIE (TROPPO SEVERE):
+                // FullAnalysis => 60.0,      
+                // PreMarketWatch => 80.0,    
+                // OffHoursMonitor => double.MaxValue (mai)
+
+                // 🔧 NUOVE SOGLIE RILASSATE:
+                AnalysisMode.FullAnalysis => 50.0,      // 🔧 RIDOTTO da 60 a 50
+                AnalysisMode.PreMarketWatch => 60.0,    // 🔧 RIDOTTO da 80 a 60
+                AnalysisMode.OffHoursMonitor => 70.0,   // 🔧 ABILITATO: era double.MaxValue (mai)
+                AnalysisMode.Skip => double.MaxValue,   // Skip rimane disabilitato
+                _ => 50.0
             };
         }
 
