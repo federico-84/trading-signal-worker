@@ -1,5 +1,4 @@
-﻿// SimplifiedEnhancedSignalFilterService.cs - VERSIONE CORRETTA CON SOLO SOGLIE RILASSATE
-// 🔧 MODIFICHE MINIME: Solo le soglie numeriche cambiano, tutto il resto rimane uguale
+﻿// SimplifiedEnhancedSignalFilterService.cs - VERSIONE FINALE BILANCIATA PER SEGNALI DI QUALITÀ
 
 using MongoDB.Bson;
 using MongoDB.Driver;
@@ -29,7 +28,14 @@ namespace PortfolioSignalWorker.Services
         {
             try
             {
-                _logger.LogDebug($"🔍 Starting enhanced analysis for {symbol} (RELAXED rules)");
+                _logger.LogDebug($"🔍 Starting QUALITY analysis for {symbol}");
+
+                // 0. Check if symbol is eligible (anti-spam)
+                if (!await IsSymbolEligibleForSignal(symbol))
+                {
+                    _logger.LogDebug($"🚫 {symbol} not eligible - recent signal exists");
+                    return null;
+                }
 
                 // 1. Ottieni dati storici
                 var historicalData = await GetHistoricalDataAsync(symbol, 50);
@@ -37,36 +43,114 @@ namespace PortfolioSignalWorker.Services
 
                 if (historicalData.Count < 20)
                 {
-                    _logger.LogWarning($"🔍 {symbol}: Insufficient data ({historicalData.Count} days), using basic signal");
-                    return await GenerateBasicSignal(symbol, currentIndicator);
+                    _logger.LogWarning($"🔍 {symbol}: Insufficient data ({historicalData.Count} days), skipping");
+                    return null; // 🔧 No basic signals - mantieni alta qualità
                 }
 
                 // 2. Calcola indicatori avanzati
                 _logger.LogDebug($"🔍 {symbol}: Calculating advanced indicators");
                 var enhancedIndicator = await CalculateAdvancedIndicators(symbol, currentIndicator, historicalData);
-                _logger.LogInformation($"🔍 {symbol}: Confluence score = {enhancedIndicator.ConfluenceScore}/100 (RELAXED rules)");
+                _logger.LogInformation($"🔍 {symbol}: Confluence score = {enhancedIndicator.ConfluenceScore}/100 (QUALITY rules)");
 
                 // 3. Analizza confluence e genera segnale
-                _logger.LogDebug($"🔍 {symbol}: Generating confluence-based signal");
-                var signal = await GenerateConfluenceBasedSignal(symbol, enhancedIndicator, historicalData);
+                _logger.LogDebug($"🔍 {symbol}: Generating quality-based signal");
+                var signal = await GenerateQualityBasedSignal(symbol, enhancedIndicator, historicalData);
 
                 if (signal != null)
                 {
-                    _logger.LogInformation($"🎯 {symbol}: Generated {signal.Type} signal with {signal.Confidence}% confidence (RELAXED)");
+                    _logger.LogInformation($"🎯 {symbol}: Generated {signal.Type} signal with {signal.Confidence}% confidence (QUALITY)");
                 }
                 else
                 {
-                    _logger.LogDebug($"🔍 {symbol}: No valid signal found even with RELAXED rules");
+                    _logger.LogDebug($"🔍 {symbol}: No quality signal found (maintaining standards)");
                 }
 
                 return signal;
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "🚨 Error in enhanced analysis for {symbol}", symbol);
-                return await GenerateBasicSignal(symbol, currentIndicator);
+                _logger.LogError(ex, "🚨 Error in quality analysis for {symbol}", symbol);
+                return null; // No fallback - mantieni qualità
             }
         }
+
+        private async Task<TradingSignal?> GenerateQualityBasedSignal(
+            string symbol,
+            EnhancedIndicator enhanced,
+            List<StockIndicator> historical)
+        {
+            // Controlla duplicati recenti
+            if (await HasRecentSignalAsync(symbol, TimeSpan.FromHours(6))) // 🔧 Aumentato a 6 ore
+            {
+                return null;
+            }
+
+            // 🚀 STRONG BUY - Solo i migliori segnali (Score 75+)
+            if (IsStrongBuySetup(enhanced))
+            {
+                return CreateEnhancedSignal(symbol, enhanced, SignalType.Buy,
+                    Math.Min(95, enhanced.ConfluenceScore + 5), // Leggero boost per strong
+                    "STRONG BUY: Excellent confluence with confirmed breakout");
+            }
+
+            // 📈 MEDIUM BUY - Buoni segnali (Score 60+)
+            if (IsMediumBuySetup(enhanced))
+            {
+                return CreateEnhancedSignal(symbol, enhanced, SignalType.Buy,
+                    Math.Min(85, enhanced.ConfluenceScore),
+                    "MEDIUM BUY: Good technical setup with volume confirmation");
+            }
+
+            // ⚠️ WARNING - Solo situazioni estreme e interessanti (Score 50+)
+            if (IsWarningSetup(enhanced))
+            {
+                return CreateEnhancedSignal(symbol, enhanced, SignalType.Warning,
+                    Math.Min(75, enhanced.ConfluenceScore),
+                    "WARNING: Extreme oversold near strong support");
+            }
+
+            return null;
+        }
+
+        #region Signal Conditions - VERSIONE QUALITÀ
+
+        private bool IsStrongBuySetup(EnhancedIndicator enhanced)
+        {
+            // 🔧 SOGLIE SELETTIVE per Strong Buy - Solo i migliori segnali
+            return enhanced.ConfluenceScore >= 75 && // Mantieni alto per qualità
+                   enhanced.TrendDirection == TrendDirection.Bullish && // 🔧 Richiedi trend rialzista
+                   enhanced.RSI >= 20 && enhanced.RSI <= 40 && // Sweet spot oversold ristretto
+                   enhanced.MACD_Histogram > 0 &&
+                   enhanced.VolumeRatio > 1.5 && // Volume breakout confermato
+                   enhanced.DistanceFromSupport <= 5 && // Molto vicino a supporto
+                   enhanced.DistanceFromResistance > 8 && // Lontano da resistenza
+                   !enhanced.RSI_Divergence; // No negative divergence
+        }
+
+        private bool IsMediumBuySetup(EnhancedIndicator enhanced)
+        {
+            // 🔧 SOGLIE MODERATE per Medium Buy - Buoni segnali
+            return enhanced.ConfluenceScore >= 60 && // Bilanciato per qualità
+                   enhanced.TrendDirection != TrendDirection.Bearish &&
+                   enhanced.RSI >= 20 && enhanced.RSI <= 45 && // Range ristretto ma ragionevole
+                   (enhanced.MACD_Histogram > 0 || enhanced.MACD_Histogram_CrossUp) &&
+                   enhanced.VolumeRatio > 1.2; // Volume confermato
+        }
+
+        private bool IsWarningSetup(EnhancedIndicator enhanced)
+        {
+            // WARNING solo per situazioni veramente estreme e interessanti
+            return enhanced.ConfluenceScore >= 50 && // Soglia più alta per WARNING
+                   (enhanced.RSI <= 25 || // Solo RSI veramente estremo
+                    (enhanced.TrendDirection == TrendDirection.Bearish &&
+                     enhanced.RSI <= 30 &&
+                     enhanced.VolumeRatio > 1.5)) && // Volume spike in trend negativo
+                   enhanced.DistanceFromSupport <= 3; // Molto vicino a supporto forte
+        }
+
+        #endregion
+
+        #region Advanced Indicators Calculation (mantenuti identici)
 
         private async Task<EnhancedIndicator> CalculateAdvancedIndicators(
             string symbol,
@@ -113,122 +197,59 @@ namespace PortfolioSignalWorker.Services
             // 7. VOLATILITY
             enhanced.Volatility = CalculateVolatility(prices.TakeLast(14).ToList());
 
-            // 8. CONFLUENCE SCORE - VERSIONE RILASSATA
-            enhanced.ConfluenceScore = CalculateRelaxedConfluenceScore(enhanced);
+            // 8. CONFLUENCE SCORE - VERSIONE QUALITÀ
+            enhanced.ConfluenceScore = CalculateQualityConfluenceScore(enhanced);
 
             return enhanced;
         }
 
-        private async Task<TradingSignal?> GenerateConfluenceBasedSignal(
-            string symbol,
-            EnhancedIndicator enhanced,
-            List<StockIndicator> historical)
+        // 🔧 CONFLUENCE SCORE BILANCIATO per qualità
+        private int CalculateQualityConfluenceScore(EnhancedIndicator enhanced)
         {
-            // Controlla duplicati recenti
-            if (await HasRecentSignalAsync(symbol, TimeSpan.FromHours(2)))
+            int score = 0;
+
+            // 1. Trend (0-25 points) - PREMIANTE per trend rialzista
+            score += enhanced.TrendDirection switch
             {
-                return null;
-            }
+                TrendDirection.Bullish => 25,
+                TrendDirection.Sideways => 10, // Neutrale non è male
+                TrendDirection.Bearish => 0,   // Penalizza trend negativo
+                _ => 5
+            };
 
-            // 🚀 STRONG BUY - Confluence molto buona (Score 75+ invece di 85+)
-            if (IsStrongBuySetup(enhanced))
-            {
-                return CreateEnhancedSignal(symbol, enhanced, SignalType.Buy,
-                    Math.Min(95, enhanced.ConfluenceScore),
-                    "STRONG BUY: Excellent confluence detected");
-            }
+            // 2. RSI positioning (0-20 points) - SELETTIVO
+            if (enhanced.RSI >= 20 && enhanced.RSI <= 40) score += 20; // Sweet spot ristretto
+            else if (enhanced.RSI >= 15 && enhanced.RSI <= 50) score += 15; // Buono
+            else if (enhanced.RSI >= 10 && enhanced.RSI <= 60) score += 10; // Accettabile
+            else score += 0; // Condizioni estreme = 0 punti
 
-            // 📈 MEDIUM BUY - Buona confluence (Score 55+ invece di 70+)
-            if (IsMediumBuySetup(enhanced))
-            {
-                return CreateEnhancedSignal(symbol, enhanced, SignalType.Buy,
-                    Math.Min(85, enhanced.ConfluenceScore),
-                    "MEDIUM BUY: Good technical setup");
-            }
+            // 3. MACD (0-20 points) - RICHIEDE CONFERMA
+            if (enhanced.MACD_Histogram > 0 && enhanced.MACD_Trend == "BULLISH") score += 20;
+            else if (enhanced.MACD_Histogram > 0) score += 15;
+            else if (enhanced.MACD_Histogram_CrossUp) score += 10;
+            else if (enhanced.MACD_Histogram > -0.05) score += 5; // Quasi positivo
+            else score += 0; // MACD negativo = 0 punti
 
-            // 🆕 OPPORTUNITY BUY - Situazione interessante (Score 45+)
-            if (IsOpportunitySetup(enhanced))
-            {
-                return CreateEnhancedSignal(symbol, enhanced, SignalType.Buy,
-                    Math.Min(75, enhanced.ConfluenceScore + 5), // Bonus confidence
-                    "OPPORTUNITY: Promising oversold setup");
-            }
+            // 4. Volume (0-15 points) - RICHIEDE CONFERMA
+            if (enhanced.IsVolumeBreakout && enhanced.VolumeRatio > 2.0) score += 15;
+            else if (enhanced.VolumeRatio > 1.5) score += 12;
+            else if (enhanced.VolumeRatio > 1.2) score += 8;
+            else if (enhanced.VolumeRatio > 1.0) score += 4; // Volume normale
+            else score += 0; // Volume basso = 0 punti
 
-            // ⚠️ WARNING - Condizioni interessanti ma rischiose (rilassato)
-            if (IsWarningSetup(enhanced))
-            {
-                return CreateEnhancedSignal(symbol, enhanced, SignalType.Warning,
-                    Math.Min(75, enhanced.ConfluenceScore),
-                    "WARNING: Oversold condition - watch closely");
-            }
+            // 5. Support/Resistance positioning (0-20 points) - POSIZIONAMENTO STRATEGICO
+            if (enhanced.DistanceFromSupport <= 3 && enhanced.DistanceFromResistance > 10) score += 20;
+            else if (enhanced.DistanceFromSupport <= 5 && enhanced.DistanceFromResistance > 8) score += 15;
+            else if (enhanced.DistanceFromSupport <= 8 && enhanced.DistanceFromResistance > 5) score += 10;
+            else if (enhanced.DistanceFromSupport <= 10) score += 5;
+            else score += 0; // Posizione sfavorevole = 0 punti
 
-            // 📉 SELL - Deterioramento tecnico
-            if (IsSellSetup(enhanced))
-            {
-                return CreateEnhancedSignal(symbol, enhanced, SignalType.Sell,
-                    Math.Min(80, enhanced.ConfluenceScore),
-                    "SELL: Technical breakdown");
-            }
-
-            return null;
-        }
-
-        #region Signal Conditions - VERSIONE RILASSATA (solo soglie cambiate)
-
-        private bool IsStrongBuySetup(EnhancedIndicator enhanced)
-        {
-            // 🔧 SOGLIE RILASSATE: 75 invece di 85, RSI 20-55 invece di 25-45, VolumeRatio 1.3 invece di IsVolumeBreakout
-            return enhanced.ConfluenceScore >= 75 && // 🔧 RIDOTTO da 85 a 75
-                   enhanced.TrendDirection != TrendDirection.Bearish &&
-                   enhanced.RSI >= 20 && enhanced.RSI <= 55 && // 🔧 AMPLIATO da 25-45 a 20-55
-                   enhanced.MACD_Histogram > 0 &&
-                   enhanced.VolumeRatio > 1.3 && // 🔧 CAMBIATO da IsVolumeBreakout a VolumeRatio > 1.3
-                   enhanced.DistanceFromSupport <= 8 && // 🔧 AMPLIATO da 5 a 8
-                   enhanced.DistanceFromResistance > 5 && // 🔧 RIDOTTO da 8 a 5
-                   !enhanced.RSI_Divergence; // No negative divergence
-        }
-
-        private bool IsMediumBuySetup(EnhancedIndicator enhanced)
-        {
-            // 🔧 SOGLIE RILASSATE: 55 invece di 70, non richiede più TrendDirection.Bullish, RSI ampliato
-            return enhanced.ConfluenceScore >= 55 && // 🔧 RIDOTTO da 70 a 55
-                   enhanced.TrendDirection != TrendDirection.Bearish && // 🔧 CAMBIATO da == Bullish a != Bearish
-                   enhanced.RSI >= 15 && enhanced.RSI <= 60 && // 🔧 AMPLIATO da 20-50 a 15-60
-                   (enhanced.MACD_Histogram > 0 || enhanced.MACD_Histogram_CrossUp) &&
-                   enhanced.VolumeRatio > 1.1; // 🔧 RIDOTTO da 1.2 a 1.1
-        }
-
-        // 🆕 NUOVO: Setup per opportunità (simile a MediumBuy ma con soglia più bassa)
-        private bool IsOpportunitySetup(EnhancedIndicator enhanced)
-        {
-            return enhanced.ConfluenceScore >= 45 && // Soglia ancora più bassa
-                   enhanced.RSI >= 10 && enhanced.RSI <= 40 && // Focus su oversold
-                   enhanced.TrendDirection != TrendDirection.Bearish &&
-                   enhanced.VolumeRatio > 1.0 && // Volume almeno normale
-                   enhanced.DistanceFromSupport <= 12; // Vicino a qualche supporto
-        }
-
-        private bool IsWarningSetup(EnhancedIndicator enhanced)
-        {
-            // 🔧 SOGLIE RILASSATE: RSI 30 invece di 25, rilassate altre condizioni
-            return enhanced.RSI <= 30 || // 🔧 AMPLIATO da 25 a 30
-                   (enhanced.TrendDirection == TrendDirection.Bearish && enhanced.RSI <= 40) || // 🔧 AMPLIATO da 35 a 40
-                   (enhanced.DistanceFromSupport <= 3 && enhanced.VolumeRatio > 1.2); // 🔧 RIDOTTO da 1.3 a 1.2
-        }
-
-        private bool IsSellSetup(EnhancedIndicator enhanced)
-        {
-            // Manteniamo il sell setup uguale per ora
-            return enhanced.TrendDirection == TrendDirection.Bearish &&
-                   enhanced.RSI > 70 &&
-                   enhanced.MACD_Histogram < 0 &&
-                   enhanced.DistanceFromResistance <= 3 &&
-                   enhanced.RSI_Divergence; // Negative divergence
+            return Math.Min(100, score);
         }
 
         #endregion
 
-        #region Technical Calculations (mantenuti identici)
+        #region Technical Calculations (mantenuti identici dal tuo file originale)
 
         private double CalculateEMA(List<double> prices, int period)
         {
@@ -382,84 +403,31 @@ namespace PortfolioSignalWorker.Services
             return Math.Sqrt(variance) * 100; // As percentage
         }
 
-        // 🔧 NUOVO: Confluence Score RILASSATO (solo punteggi modificati)
-        private int CalculateRelaxedConfluenceScore(EnhancedIndicator enhanced)
-        {
-            int score = 0;
-
-            // 1. Trend (0-25 points) - PIÙ GENEROSO
-            score += enhanced.TrendDirection switch
-            {
-                TrendDirection.Bullish => 25,
-                TrendDirection.Sideways => 15, // 🔧 Aumentato da 10 a 15
-                TrendDirection.Bearish => 5,   // 🔧 Aumentato da 0 a 5
-                _ => 10
-            };
-
-            // 2. RSI positioning (0-20 points) - RANGE AMPLIATO
-            if (enhanced.RSI >= 15 && enhanced.RSI <= 55) score += 20; // 🔧 Range ampliato da 25-45 a 15-55
-            else if (enhanced.RSI >= 10 && enhanced.RSI <= 65) score += 15; // 🔧 Range molto ampliato
-            else if (enhanced.RSI >= 5 && enhanced.RSI <= 75) score += 10; // 🔧 Range estremamente ampliato
-            else score += 5; // 🔧 Minimo garantito
-
-            // 3. MACD (0-20 points) - PIÙ PERMISSIVO
-            if (enhanced.MACD_Histogram > 0 && enhanced.MACD_Trend == "BULLISH") score += 20;
-            else if (enhanced.MACD_Histogram > 0) score += 15;
-            else if (enhanced.MACD_Histogram_CrossUp) score += 12; // 🔧 Aumentato da 10
-            else if (enhanced.MACD_Histogram > -0.1) score += 8; // 🔧 Bonus per MACD quasi positivo
-            else score += 3; // 🔧 Minimo anche per MACD negativo
-
-            // 4. Volume (0-15 points) - SOGLIE RIDOTTE
-            if (enhanced.IsVolumeBreakout && enhanced.VolumeRatio > 2.0) score += 15;
-            else if (enhanced.VolumeRatio > 1.5) score += 12;
-            else if (enhanced.VolumeRatio > 1.2) score += 10;
-            else if (enhanced.VolumeRatio > 1.0) score += 8;  // 🔧 Bonus per volume normale
-            else if (enhanced.VolumeRatio > 0.7) score += 5;  // 🔧 Anche volume basso ottiene punti
-            else score += 2; // 🔧 Minimo garantito
-
-            // 5. Support/Resistance positioning (0-20 points) - PIÙ FLESSIBILE
-            if (enhanced.DistanceFromSupport <= 5 && enhanced.DistanceFromResistance > 10) score += 20;
-            else if (enhanced.DistanceFromSupport <= 8 && enhanced.DistanceFromResistance > 6) score += 15; // 🔧 Ampliato
-            else if (enhanced.DistanceFromSupport <= 12) score += 12; // 🔧 Molto ampliato
-            else if (enhanced.DistanceFromSupport <= 20) score += 8;  // 🔧 Ancora più ampliato
-            else score += 5; // 🔧 Minimo garantito
-
-            var finalScore = Math.Min(100, score);
-
-            // 🔧 DEBUG: Log dettagli per troubleshooting
-            _logger.LogDebug($"🔍 RELAXED Confluence: Trend={enhanced.TrendDirection}({score}), RSI={enhanced.RSI:F1}, " +
-                           $"MACD={enhanced.MACD_Histogram:F3}, Volume={enhanced.VolumeRatio:F1}x, Final={finalScore}");
-
-            return finalScore;
-        }
-
         #endregion
 
-        #region Utility Methods (mantenuti identici ma con miglioramenti per Opportunity)
+        #region Utility Methods
 
         private TradingSignal CreateEnhancedSignal(string symbol, EnhancedIndicator enhanced, SignalType type,
             double confidence, string baseReason)
         {
             var reasons = new List<string> { baseReason };
 
-            // Aggiungi dettagli alla spiegazione
+            // Aggiungi dettagli specifici per la qualità
             if (enhanced.TrendDirection == TrendDirection.Bullish)
-                reasons.Add("Bullish trend");
-            else if (enhanced.TrendDirection == TrendDirection.Sideways)
-                reasons.Add("Sideways trend"); // 🔧 Non più penalizzante
+                reasons.Add("Strong bullish trend");
 
             if (enhanced.IsVolumeBreakout)
-                reasons.Add($"Volume spike ({enhanced.VolumeRatio:F1}x)");
-            else if (enhanced.VolumeRatio > 1.1) // 🔧 Soglia ridotta
-                reasons.Add($"Good volume ({enhanced.VolumeRatio:F1}x)");
+                reasons.Add($"Volume breakout ({enhanced.VolumeRatio:F1}x)");
+            else if (enhanced.VolumeRatio > 1.2)
+                reasons.Add($"Volume confirmed ({enhanced.VolumeRatio:F1}x)");
 
-            if (enhanced.DistanceFromSupport <= 8) // 🔧 Soglia ampliata
-                reasons.Add("Near support");
+            if (enhanced.DistanceFromSupport <= 5)
+                reasons.Add("Near key support");
 
             if (enhanced.MACD_Trend == "BULLISH")
-                reasons.Add("MACD bullish");
+                reasons.Add("MACD momentum");
 
-            reasons.Add($"Confluence: {enhanced.ConfluenceScore}/100 (RELAXED)");
+            reasons.Add($"Quality score: {enhanced.ConfluenceScore}/100");
 
             return new TradingSignal
             {
@@ -478,34 +446,35 @@ namespace PortfolioSignalWorker.Services
                 ResistanceLevel = enhanced.ResistanceLevel,
                 VolumeStrength = Math.Min(10, enhanced.VolumeRatio * 3),
                 TrendStrength = enhanced.TrendStrength,
-                MarketCondition = $"{enhanced.TrendDirection} ({enhanced.ConfluenceScore}/100)"
+                MarketCondition = $"{enhanced.TrendDirection} (Q:{enhanced.ConfluenceScore}/100)"
             };
         }
 
-        private async Task<TradingSignal?> GenerateBasicSignal(string symbol, StockIndicator current)
+        // 🔧 NUOVO: Anti-spam per simbolo
+        private async Task<bool> IsSymbolEligibleForSignal(string symbol)
         {
-            // Fallback per quando non abbiamo abbastanza dati - RILASSATO
-            if (await HasRecentSignalAsync(symbol, TimeSpan.FromHours(2)))
-                return null;
+            // Controlla se abbiamo già inviato un segnale recente per questo simbolo
+            var recentSignalCount = await CountRecentSignalsForSymbol(symbol, TimeSpan.FromHours(24));
 
-            // 🔧 SOGLIE RILASSATE: RSI 30 invece di 25
-            if (current.RSI < 30 && current.MACD_Histogram_CrossUp) // 🔧 AMPLIATO da 25 a 30
+            if (recentSignalCount >= 2) // Max 2 segnali per simbolo al giorno
             {
-                return new TradingSignal
-                {
-                    Symbol = symbol,
-                    Type = SignalType.Buy,
-                    Confidence = 60, // 🔧 Ridotto da 65 a 60
-                    Reason = "BASIC BUY: RSI oversold + MACD cross (limited data)",
-                    RSI = current.RSI,
-                    MACD_Histogram = current.MACD_Histogram,
-                    Price = current.Price,
-                    Volume = current.Volume,
-                    SignalHash = GenerateSignalHash(symbol, "BASIC_BUY", current.RSI)
-                };
+                _logger.LogDebug($"Symbol {symbol} already has {recentSignalCount} signals today - maintaining quality standards");
+                return false;
             }
 
-            return null;
+            return true;
+        }
+
+        private async Task<int> CountRecentSignalsForSymbol(string symbol, TimeSpan timeWindow)
+        {
+            var cutoffTime = DateTime.UtcNow.Subtract(timeWindow);
+            var filter = Builders<TradingSignal>.Filter.And(
+                Builders<TradingSignal>.Filter.Eq(x => x.Symbol, symbol),
+                Builders<TradingSignal>.Filter.Gte(x => x.CreatedAt, cutoffTime),
+                Builders<TradingSignal>.Filter.Eq(x => x.Sent, true)
+            );
+
+            return (int)await _signalCollection.CountDocumentsAsync(filter);
         }
 
         private async Task<List<StockIndicator>> GetHistoricalDataAsync(string symbol, int periods)

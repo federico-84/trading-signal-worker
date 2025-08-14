@@ -1,5 +1,6 @@
 ﻿using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
+using MongoDB.Driver;
 using PortfolioSignalWorker.Models;
 using PortfolioSignalWorker.Services;
 using static PortfolioSignalWorker.Services.SmartMarketHoursService;
@@ -239,8 +240,11 @@ public class SimplifiedEnhancedWorker : BackgroundService
                         }
 
                         // 6. Final quality checks
-                        var passesQualityChecks = PassesFinalQualityChecks(signal, watchlistSymbol);
-                        _logger.LogInformation($"🔍 PassesFinalQualityChecks result for {watchlistSymbol.Symbol}: {passesQualityChecks}");
+                      
+
+
+                        var passesQualityChecks = await PassesFinalQualityChecks(signal, watchlistSymbol);
+                         _logger.LogInformation($"🔍 PassesFinalQualityChecks result for {watchlistSymbol.Symbol}: {passesQualityChecks}");
 
                         if (passesQualityChecks)
                         {
@@ -314,27 +318,34 @@ public class SimplifiedEnhancedWorker : BackgroundService
             return;
         }
 
-        _logger.LogInformation($"🔍 VALIDATION DEBUG for {signal.Symbol ?? "UNKNOWN"}:");
-        _logger.LogInformation($"   Type: {signal.Type}, Confidence: {signal.Confidence}%");
+        _logger.LogInformation($"🔍 QUALITY VALIDATION for {signal.Symbol ?? "UNKNOWN"}:");
+        _logger.LogInformation($"   Type: {signal.Type}, Confidence: {signal.Confidence}% (Threshold: 65%)");
         _logger.LogInformation($"   Mode: {mode}");
-        _logger.LogInformation($"   Price: ${signal.Price:F2}");
+        _logger.LogInformation($"   Price: €{signal.Price:F2}");
 
-        // 🔧 NULL-SAFE logging per tutti i campi opzionali
-        _logger.LogInformation($"   StopLoss: {(signal.StopLoss?.ToString("F2") ?? "NULL")} ({(signal.StopLossPercent?.ToString("F1") ?? "NULL")}%)");
-        _logger.LogInformation($"   TakeProfit: {(signal.TakeProfit?.ToString("F2") ?? "NULL")} ({(signal.TakeProfitPercent?.ToString("F1") ?? "NULL")}%)");
-        _logger.LogInformation($"   R/R Ratio: {(signal.RiskRewardRatio?.ToString("F1") ?? "NULL")}");
-        _logger.LogInformation($"   Volume Strength: {(signal.VolumeStrength?.ToString("F1") ?? "NULL")}");
+        // Controlli qualità specifici
+        _logger.LogInformation($"   StopLoss: {(signal.StopLoss?.ToString("F2") ?? "MISSING")} ({(signal.StopLossPercent?.ToString("F1") ?? "NULL")}%)");
+        _logger.LogInformation($"   TakeProfit: {(signal.TakeProfit?.ToString("F2") ?? "MISSING")} ({(signal.TakeProfitPercent?.ToString("F1") ?? "NULL")}%)");
+        _logger.LogInformation($"   R/R Ratio: {(signal.RiskRewardRatio?.ToString("F1") ?? "NULL")} (Required: 2.0+)");
+        _logger.LogInformation($"   Volume Strength: {(signal.VolumeStrength?.ToString("F1") ?? "NULL")} (Required: 5+)");
         _logger.LogInformation($"   Trend Strength: {(signal.TrendStrength?.ToString("F1") ?? "NULL")}");
 
-        // Support/Resistance levels
-        _logger.LogInformation($"   Support Level: {(signal.SupportLevel?.ToString("F2") ?? "NULL")}");
-        _logger.LogInformation($"   Resistance Level: {(signal.ResistanceLevel?.ToString("F2") ?? "NULL")}");
+        // Livelli tecnici
+        _logger.LogInformation($"   Support Level: €{(signal.SupportLevel?.ToString("F2") ?? "NULL")}");
+        _logger.LogInformation($"   Resistance Level: €{(signal.ResistanceLevel?.ToString("F2") ?? "NULL")}");
 
         var threshold = _smartMarketHours.GetConfidenceThreshold(mode);
-        _logger.LogInformation($"   Threshold for {mode}: {threshold}%");
+        _logger.LogInformation($"   Mode Threshold: {threshold}%");
 
-        // Mostra anche il motivo del segnale
+        // Motivo del segnale
         _logger.LogInformation($"   Reason: {signal.Reason ?? "No reason specified"}");
+
+        // Validazione qualità
+        _logger.LogInformation($"   ✅ QUALITY CHECKS:");
+        _logger.LogInformation($"      Confidence ≥ 65%: {(signal.Confidence >= 65 ? "PASS" : "FAIL")}");
+        _logger.LogInformation($"      R/R ≥ 2.0: {(signal.RiskRewardRatio >= 2.0 ? "PASS" : signal.RiskRewardRatio?.ToString() ?? "NULL")}");
+        _logger.LogInformation($"      Volume ≥ 5: {(signal.VolumeStrength >= 5 ? "PASS" : signal.VolumeStrength?.ToString() ?? "NULL")}");
+        _logger.LogInformation($"      Valid Levels: {(signal.StopLoss < signal.Price && signal.TakeProfit > signal.Price ? "PASS" : "FAIL")}");
     }
     private bool ValidateSignalForMode(TradingSignal signal, AnalysisMode mode)
     {
@@ -364,34 +375,50 @@ public class SimplifiedEnhancedWorker : BackgroundService
 
     private bool ValidateFullAnalysisSignal(TradingSignal signal)
     {
-        // 🔧 VALIDAZIONI MOLTO RILASSATE per FullAnalysis
+        // 🔧 VALIDATION SELETTIVA per segnali di qualità
 
-        // 1. Risk/Reward ratio check - RILASSATO
-        if (signal.RiskRewardRatio.HasValue && signal.RiskRewardRatio < 1.2) // 🔧 RIDOTTO da 2.0 a 1.2
+        // 1. Confidence SELETTIVA
+        if (signal.Confidence < 65) // 🔧 Soglia alta per qualità
         {
-            _logger.LogDebug($"Signal rejected: very poor R/R ratio ({signal.RiskRewardRatio:F1}) - but allowing anyway for testing");
-            // return false; // 🔧 COMMENTATO: Non bloccare più per R/R basso
+            _logger.LogDebug($"Signal rejected: confidence {signal.Confidence}% < 65% (quality threshold)");
+            return false;
         }
 
-        // 2. Volume check for buy signals - MOLTO RILASSATO
-        if (signal.Type == SignalType.Buy && signal.VolumeStrength.HasValue && signal.VolumeStrength < 2) // 🔧 RIDOTTO da 4 a 2
+        // 2. Risk/Reward QUALITATIVO - RIGOROSO
+        if (signal.RiskRewardRatio.HasValue && signal.RiskRewardRatio < 2.0) // 🔧 Standard alto
         {
-            _logger.LogDebug($"Buy signal with low volume ({signal.VolumeStrength}) - proceeding anyway");
-            // return false; // 🔧 COMMENTATO: Non bloccare più per volume basso
+            _logger.LogDebug($"Signal rejected: poor R/R ratio ({signal.RiskRewardRatio:F1}) - quality standard");
+            return false;
         }
 
-        // 3. Trend check for high confidence signals - RILASSATO
-        if (signal.Confidence >= 90 && signal.TrendStrength.HasValue && signal.TrendStrength < 3) // 🔧 Soglia 90 invece di 85, trend 3 invece di 5
+        // 3. Volume CONFERMATO per Buy signals - RIGOROSO
+        if (signal.Type == SignalType.Buy && signal.VolumeStrength.HasValue && signal.VolumeStrength < 5) // 🔧 Standard alto
         {
-            _logger.LogDebug($"High confidence signal with weak trend ({signal.TrendStrength}) - allowing");
-            // return false; // 🔧 COMMENTATO: Non bloccare più per trend debole
+            _logger.LogDebug($"Buy signal rejected: insufficient volume ({signal.VolumeStrength}) - quality standard");
+            return false;
         }
 
-        _logger.LogDebug($"✅ {signal.Symbol}: Passed RELAXED FullAnalysis validation");
-        return true; // 🔧 Ora accetta quasi tutto
+        // 4. Trend POSITIVO per high confidence signals
+        if (signal.Confidence >= 80 && signal.TrendStrength.HasValue && signal.TrendStrength < 6) // 🔧 Rigoroso
+        {
+            _logger.LogDebug($"High confidence signal rejected: weak trend ({signal.TrendStrength}) - quality standard");
+            return false;
+        }
+
+        // 5. 🔧 NUOVO: Strong Buy deve avere trend rialzista
+        if (signal.Confidence >= 85 && signal.MarketCondition?.Contains("Bearish") == true)
+        {
+            _logger.LogDebug($"Strong Buy rejected: bearish trend inconsistent with high confidence");
+            return false;
+        }
+
+        _logger.LogDebug($"✅ {signal.Symbol}: Passed QUALITY validation standards");
+        return true;
     }
-    private bool PassesFinalQualityChecks(TradingSignal signal, WatchlistSymbol symbol)
+    private async Task<bool> PassesFinalQualityChecks(TradingSignal signal, WatchlistSymbol symbol)
     {
+        // 🔧 CONTROLLI QUALITÀ RIGOROSI - Solo segnali validi passano
+
         if (signal == null)
         {
             _logger.LogWarning("PassesFinalQualityChecks: signal is NULL");
@@ -400,55 +427,96 @@ public class SimplifiedEnhancedWorker : BackgroundService
 
         try
         {
-            // 1. Price level sanity checks - SOLO controlli critici
+            // 1. Price level VALIDATION - RIGOROSA
             if (signal.Price <= 0)
             {
-                _logger.LogWarning($"Invalid price: ${signal.Price:F2}");
+                _logger.LogWarning($"Invalid price rejected: ${signal.Price:F2}");
                 return false;
             }
 
-            // 2. Stop Loss check - RILASSATO e NULL-SAFE
+            // 2. Stop Loss VALIDATION - RIGOROSA
             if (signal.StopLoss.HasValue)
             {
                 if (signal.StopLoss >= signal.Price)
                 {
-                    _logger.LogWarning($"Invalid StopLoss: Entry=${signal.Price:F2}, SL=${signal.StopLoss:F2} - BUT ALLOWING");
-                    // return false; // 🔧 COMMENTATO: Permetti anche stop loss invalidi per test
+                    _logger.LogWarning($"Invalid StopLoss rejected: Entry=${signal.Price:F2}, SL=${signal.StopLoss:F2}");
+                    return false; // 🔧 RIGETTA segnali con SL invalidi
                 }
             }
-            else
+            else if (signal.Type == SignalType.Buy)
             {
-                _logger.LogDebug($"StopLoss is NULL for {signal.Symbol} - allowing");
+                _logger.LogWarning($"Buy signal rejected: Missing StopLoss for {signal.Symbol}");
+                return false; // 🔧 Buy DEVE avere stop loss
             }
 
-            // 3. Take Profit check - RILASSATO e NULL-SAFE
+            // 3. Take Profit VALIDATION - RIGOROSA
             if (signal.TakeProfit.HasValue)
             {
                 if (signal.TakeProfit <= signal.Price)
                 {
-                    _logger.LogWarning($"Invalid TakeProfit: Entry=${signal.Price:F2}, TP=${signal.TakeProfit:F2} - BUT ALLOWING");
-                    // return false; // 🔧 COMMENTATO: Permetti anche take profit invalidi per test
+                    _logger.LogWarning($"Invalid TakeProfit rejected: Entry=${signal.Price:F2}, TP=${signal.TakeProfit:F2}");
+                    return false; // 🔧 RIGETTA segnali con TP invalidi
                 }
             }
-            else
+            else if (signal.Type == SignalType.Buy)
             {
-                _logger.LogDebug($"TakeProfit is NULL for {signal.Symbol} - allowing");
+                _logger.LogWarning($"Buy signal rejected: Missing TakeProfit for {signal.Symbol}");
+                return false; // 🔧 Buy DEVE avere take profit
             }
 
-            // 4. Stop loss percentage - MOLTO RILASSATO e NULL-SAFE
-            if (signal.StopLossPercent.HasValue && signal.StopLossPercent > 25) // 🔧 AUMENTATO da 15% a 25%
+            // 4. Stop loss RAGIONEVOLE
+            if (signal.StopLossPercent.HasValue && signal.StopLossPercent > 8) // 🔧 Max 8% per qualità
             {
-                _logger.LogWarning($"Wide stop loss: {signal.StopLossPercent:F1}% - but allowing");
-                // return false; // 🔧 COMMENTATO: Permetti stop loss ampi
+                _logger.LogWarning($"Stop loss too wide rejected: {signal.StopLossPercent:F1}% > 8%");
+                return false;
             }
 
-            _logger.LogDebug($"✅ {signal.Symbol}: Passed RELAXED final quality checks");
-            return true; // 🔧 Quasi sempre true
+            // 5. Take profit REALISTICO
+            if (signal.TakeProfitPercent.HasValue && signal.TakeProfitPercent > 20) // 🔧 Max 20%
+            {
+                _logger.LogWarning($"Take profit too optimistic rejected: {signal.TakeProfitPercent:F1}% > 20%");
+                return false;
+            }
+
+            // 6. 🔧 CORRETTO: Check daily limits
+            var dailySignalCount = await GetDailySignalCount();
+            if (dailySignalCount >= 10) // Max 10 segnali al giorno
+            {
+                _logger.LogWarning($"Daily signal limit reached: {dailySignalCount}/10 - maintaining quality");
+                return false;
+            }
+
+            _logger.LogDebug($"✅ {signal.Symbol}: Passed RIGOROUS final quality checks");
+            return true;
         }
         catch (Exception ex)
         {
             _logger.LogError(ex, $"Error in PassesFinalQualityChecks for {signal?.Symbol ?? "UNKNOWN"}");
             return false;
+        }
+    }
+    private async Task<int> GetDailySignalCount()
+    {
+        try
+        {
+            var today = DateTime.UtcNow.Date;
+            var tomorrow = today.AddDays(1);
+
+            // 🔧 CORRETTO: Usa il metodo giusto del MongoService
+            var signalCollection = _mongo.GetDatabase().GetCollection<TradingSignal>("TradingSignals");
+
+            var filter = Builders<TradingSignal>.Filter.And(
+                Builders<TradingSignal>.Filter.Gte(x => x.CreatedAt, today),
+                Builders<TradingSignal>.Filter.Lt(x => x.CreatedAt, tomorrow),
+                Builders<TradingSignal>.Filter.Eq(x => x.Sent, true)
+            );
+
+            return (int)await signalCollection.CountDocumentsAsync(filter);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error counting daily signals");
+            return 0; // In caso di errore, permetti il segnale
         }
     }
 
