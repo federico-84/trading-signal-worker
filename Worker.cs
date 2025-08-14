@@ -12,7 +12,7 @@ public class Worker : BackgroundService
     private readonly SymbolSelectionService _symbolSelection;
     private readonly SmartMarketHoursService _smartMarketHours; // UPGRADED
     private readonly BreakoutDetectionService _breakoutDetection;
-    private readonly RiskManagementService _riskManagement;
+    private readonly SimplifiedEnhancedRiskManagementService _riskManagement;
     private readonly ILogger<Worker> _logger;
 
     public Worker(
@@ -22,7 +22,7 @@ public class Worker : BackgroundService
         SignalFilterService signalFilter,
         SymbolSelectionService symbolSelection,
         SmartMarketHoursService smartMarketHours, // UPGRADED
-        RiskManagementService riskManagement,
+        SimplifiedEnhancedRiskManagementService riskManagement,
         BreakoutDetectionService breakoutDetection,
     ILogger<Worker> logger)
     {
@@ -185,126 +185,41 @@ public class Worker : BackgroundService
                     try
                     {
                         var modeDescription = _smartMarketHours.GetModeDescription(analysisMode, watchlistSymbol.Symbol);
-                        _logger.LogInformation($"🔍 Analyzing {watchlistSymbol.Symbol} - {modeDescription}");
+                        _logger.LogDebug($"Analyzing {watchlistSymbol.Symbol} - {modeDescription}");
 
                         // Get indicators
                         var indicator = await _yahooFinance.GetIndicatorsAsync(watchlistSymbol.Symbol);
-                        _logger.LogDebug($"📊 {watchlistSymbol.Symbol}: Price=${indicator.Price:F2}, RSI={indicator.RSI:F1}, Volume={indicator.Volume:N0}");
 
-                        // 🚀 Breakout analysis
-                        var breakoutSignal = await _breakoutDetection.AnalyzeBreakoutPotentialAsync(watchlistSymbol.Symbol);
-                        if (breakoutSignal != null)
-                        {
-                            _logger.LogDebug($"🎯 {watchlistSymbol.Symbol}: Breakout {breakoutSignal.BreakoutType} (Score: {breakoutSignal.BreakoutScore}/100)");
-                        }
-
-                        // Analyze for traditional signals
+                        // Analyze for signals
                         var signal = await _signalFilter.AnalyzeSignalAsync(watchlistSymbol.Symbol, indicator);
-                        if (signal != null)
-                        {
-                            _logger.LogDebug($"📈 {watchlistSymbol.Symbol}: Traditional signal {signal.Type} (Confidence: {signal.Confidence}%)");
-                        }
 
                         // Save indicator
                         await _mongo.SaveIndicatorAsync(indicator);
 
-                        // 🚀 Gestione breakout signals
-                        if (breakoutSignal != null && ShouldSendBreakoutSignal(breakoutSignal, analysisMode))
-                        {
-                            _logger.LogInformation($"🎯 Processing breakout signal for {watchlistSymbol.Symbol}: {breakoutSignal.BreakoutType} ({breakoutSignal.BreakoutScore}/100)");
-
-                            var breakoutDocument = MongoService.ConvertToDocument(breakoutSignal);
-                            await _mongo.SaveBreakoutSignalAsync(breakoutDocument);
-
-                            var breakoutTradingSignal = ConvertBreakoutToTradingSignal(breakoutSignal);
-                            breakoutTradingSignal = await _riskManagement.EnhanceSignalWithRiskManagement(breakoutTradingSignal);
-
-                            if (await _signalFilter.ValidateSignalComprehensiveAsync(breakoutTradingSignal))
-                            {
-                                await _mongo.SaveSignalAsync(breakoutTradingSignal);
-                                await _mongo.MarkBreakoutSignalAsSentAsync(breakoutDocument.Id, breakoutTradingSignal.Id);
-
-                                var breakoutMessage = FormatBreakoutMessage(breakoutSignal, breakoutTradingSignal, analysisMode, watchlistSymbol.Market ?? "US");
-                                await _telegram.SendMessageAsync(breakoutMessage);
-                                await _signalFilter.MarkSignalAsSentAsync(breakoutTradingSignal.Id);
-
-                                signalsSentCount++;
-                                _logger.LogInformation($"✅ BREAKOUT signal sent for {watchlistSymbol.Symbol}");
-                                continue;
-                            }
-                            else
-                            {
-                                _logger.LogWarning($"⚠️ Breakout signal validation failed for {watchlistSymbol.Symbol}");
-                            }
-                        }
-
-                        // Traditional signal processing
                         if (signal != null)
                         {
-                            _logger.LogInformation($"📈 Signal detected for {watchlistSymbol.Symbol}: {signal.Type} ({signal.Confidence}%) - {signal.Reason}");
-
-                            // ===== HYBRID DECISION: Dovrei inviare questo segnale? =====
                             var shouldSend = _smartMarketHours.ShouldSendSignal(signal, analysisMode);
-                            var threshold = _smartMarketHours.GetConfidenceThreshold(analysisMode);
-
-                            _logger.LogInformation($"🎯 Signal decision for {watchlistSymbol.Symbol}: " +
-                                $"Confidence {signal.Confidence}% vs threshold {threshold}% = {(shouldSend ? "SEND" : "SKIP")}");
 
                             if (shouldSend)
                             {
-                                try
-                                {
-                                    // 🛡️ STEP 1: Risk Management
-                                    _logger.LogInformation($"🛡️ STEP 1: Adding risk management to {watchlistSymbol.Symbol}...");
-                                    signal = await _riskManagement.EnhanceSignalWithRiskManagement(signal);
-                                    _logger.LogInformation($"✅ STEP 1 COMPLETED: Risk management added to {watchlistSymbol.Symbol}");
+                                // 🆕 NUOVO: Enhanced con risk management data-driven
+                                signal = await _riskManagement.EnhanceSignalWithSmartRiskManagement(signal);
 
-                                    // 💾 STEP 2: Save to MongoDB
-                                    _logger.LogInformation($"💾 STEP 2: Saving signal to database for {watchlistSymbol.Symbol}...");
-                                    await _mongo.SaveSignalAsync(signal);
-                                    _logger.LogInformation($"✅ STEP 2 COMPLETED: Signal saved to database for {watchlistSymbol.Symbol}");
+                                // Save signal
+                                await _mongo.SaveSignalAsync(signal);
 
-                                    // 📱 STEP 3: Format Message
-                                    _logger.LogInformation($"📝 STEP 3: Formatting message for {watchlistSymbol.Symbol}...");
-                                    var message = FormatHybridMessage(signal, analysisMode, watchlistSymbol.Market ?? "US");
-                                    _logger.LogInformation($"✅ STEP 3 COMPLETED: Message formatted for {watchlistSymbol.Symbol} ({message.Length} chars)");
+                                // Send message con contesto avanzato
+                                var message = FormatAdvancedMessage(signal, analysisMode, watchlistSymbol.Market ?? "US");
+                                await _telegram.SendMessageAsync(message);
+                                await _signalFilter.MarkSignalAsSentAsync(signal.Id);
 
-                                    // 📤 STEP 4: Send to Telegram
-                                    _logger.LogInformation($"📤 STEP 4: Sending message to Telegram for {watchlistSymbol.Symbol}...");
-
-                                    // DEBUG: Log messaggio (primi 200 chars)
-                                    _logger.LogDebug($"Message preview: {message.Substring(0, Math.Min(200, message.Length))}...");
-
-                                    await _telegram.SendMessageAsync(message);
-                                    _logger.LogInformation($"✅ STEP 4 COMPLETED: Message sent to Telegram for {watchlistSymbol.Symbol}");
-
-                                    // 🏷️ STEP 5: Mark as Sent
-                                    _logger.LogInformation($"🏷️ STEP 5: Marking signal as sent for {watchlistSymbol.Symbol}...");
-                                    await _signalFilter.MarkSignalAsSentAsync(signal.Id);
-                                    _logger.LogInformation($"✅ STEP 5 COMPLETED: Signal marked as sent for {watchlistSymbol.Symbol}");
-
-                                    signalsSentCount++;
-                                    _logger.LogInformation($"🚀 SUCCESS: {analysisMode} signal SENT for {watchlistSymbol.Symbol}: " +
-                                        $"{signal.Type} ({signal.Confidence}%) - COMPLETE PIPELINE!");
-                                }
-                                catch (Exception ex)
-                                {
-                                    _logger.LogError(ex, $"💥 PIPELINE FAILED at some step for {watchlistSymbol.Symbol}");
-
-                                    // Log dettagliato dell'errore
-                                    _logger.LogError($"❌ Error Type: {ex.GetType().Name}");
-                                    _logger.LogError($"❌ Error Message: {ex.Message}");
-                                    if (ex.InnerException != null)
-                                    {
-                                        _logger.LogError($"❌ Inner Exception: {ex.InnerException.Message}");
-                                    }
-                                    _logger.LogError($"❌ Stack Trace: {ex.StackTrace}");
-                                }
+                                signalsSentCount++;
+                                _logger.LogInformation($"✅ {analysisMode} signal sent for {watchlistSymbol.Symbol}: " +
+                                    $"{signal.Type} ({signal.Confidence}%) - Strategy: {signal.TakeProfitStrategy ?? "Standard"}");
                             }
                             else
                             {
-                                _logger.LogInformation($"⏸️ Signal for {watchlistSymbol.Symbol} below {analysisMode} threshold " +
-                                    $"({signal.Confidence}% < {threshold}%)");
+                                _logger.LogDebug($"⏸️ Signal for {watchlistSymbol.Symbol} below {analysisMode} threshold");
                             }
                         }
 
@@ -315,13 +230,13 @@ public class Worker : BackgroundService
 
                         processedCount++;
 
-                        // Rate limiting
+                        // 🔄 CORRETTO: Dynamic rate limiting
                         var delay = analysisMode switch
                         {
-                            AnalysisMode.FullAnalysis => 800,
-                            AnalysisMode.PreMarketWatch => 1000,
-                            AnalysisMode.OffHoursMonitor => 1200,
-                            _ => 1000
+                            AnalysisMode.FullAnalysis => 600,      // 600ms durante mercato
+                            AnalysisMode.PreMarketWatch => 800,   // 800ms pre-market
+                            AnalysisMode.OffHoursMonitor => 1000, // 1s off-hours
+                            _ => 800
                         };
 
                         await Task.Delay(delay, stoppingToken);
@@ -333,7 +248,34 @@ public class Worker : BackgroundService
                 }
 
                 _logger.LogInformation($"📈 Cycle completed: {processedCount} processed, {signalsSentCount} signals sent");
+                // 🆕 NUOVO: Aggiorna performance tracking ogni ora
+                if (DateTime.Now.Minute == 0) // All'inizio di ogni ora
+                {
+                    try
+                    {
+                        await _riskManagement.UpdateDataDrivenPerformance();
 
+                        // Report settimanale (lunedì mattina)
+                        if (DateTime.Now.DayOfWeek == DayOfWeek.Monday && DateTime.Now.Hour == 9)
+                        {
+                            var insights = await _riskManagement.GetDataDrivenInsights();
+                            if (insights.HasSufficientData)
+                            {
+                                var reportMessage = $"📊 WEEKLY TP INSIGHTS:\n" +
+                                                   $"Analyzed: {insights.AnalyzedRecords} trades\n" +
+                                                   $"Top 3 recommendations:\n" +
+                                                   string.Join("\n", insights.Recommendations.Take(3).Select(r => $"• {r}"));
+
+                                await _telegram.SendMessageAsync(reportMessage);
+                                _logger.LogInformation("📈 Weekly Take Profit insights sent");
+                            }
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.LogError(ex, "Error updating take profit performance");
+                    }
+                }
                 // Daily optimization (at midnight)
                 if (DateTime.Now.Hour == 0 && DateTime.Now.Minute < 5)
                 {
@@ -356,7 +298,143 @@ public class Worker : BackgroundService
             }
         }
     }
+    private string FormatAdvancedMessage(TradingSignal signal, AnalysisMode mode, string market = "US")
+    {
+        var modeEmoji = mode switch
+        {
+            AnalysisMode.FullAnalysis => "🟢",
+            AnalysisMode.PreMarketWatch => "🟡",
+            AnalysisMode.OffHoursMonitor => "🟠",
+            _ => "⚪"
+        };
 
+        var signalEmoji = signal.Type switch
+        {
+            SignalType.Buy when signal.Confidence >= 90 => "🚀",
+            SignalType.Buy => "📈",
+            SignalType.Warning => "⚠️",
+            SignalType.Sell => "📉",
+            _ => "ℹ️"
+        };
+
+        var marketFlag = market switch
+        {
+            "EU" => "🇪🇺",
+            "US" => "🇺🇸",
+            _ => "🌍"
+        };
+
+        var currency = GetCurrencySymbol(signal.Symbol, market);
+        var marketStatus = _smartMarketHours.GetModeDescription(mode, signal.Symbol);
+
+        // Titolo con indicatore data-driven
+        var dataDrivenIndicator = !string.IsNullOrEmpty(signal.TakeProfitStrategy) ? " 🧠" : "";
+        var title = $"{signalEmoji} {signal.Type.ToString().ToUpper()} {signal.Symbol} {marketFlag}{dataDrivenIndicator}";
+
+        var message = $@"{title}
+
+💪 Confidence: {signal.Confidence}%";
+
+        // Aggiungi info strategia se disponibile
+        if (!string.IsNullOrEmpty(signal.TakeProfitStrategy))
+        {
+            message += $@"
+🧠 Strategy: {signal.TakeProfitStrategy}";
+
+            if (signal.PredictedSuccessProbability.HasValue)
+            {
+                message += $" ({signal.PredictedSuccessProbability:F0}% success rate)";
+            }
+        }
+
+        message += $@"
+
+📊 TECHNICAL:
+• RSI: {signal.RSI:F1}
+• MACD: {signal.MACD_Histogram:F3}
+• Entry: {currency}{signal.Price:F2}
+• Volume: {FormatVolume(signal.Volume)}";
+
+        if (signal.VolumeStrength.HasValue)
+        {
+            message += $" (Strength: {signal.VolumeStrength:F0}/10)";
+        }
+
+        message += "\n\n🛡️ RISK MANAGEMENT:";
+
+        if (signal.StopLoss.HasValue)
+        {
+            message += $@"
+• Stop Loss: {currency}{signal.StopLoss:F2} ({signal.StopLossPercent:F1}%)";
+        }
+
+        if (signal.TakeProfit.HasValue)
+        {
+            message += $@"
+• Take Profit: {currency}{signal.TakeProfit:F2} ({signal.TakeProfitPercent:F1}%)";
+        }
+
+        if (signal.RiskRewardRatio.HasValue)
+        {
+            message += $@"
+• Risk/Reward: 1:{signal.RiskRewardRatio:F1}";
+        }
+
+        // Strategie di entrata/uscita se disponibili
+        if (!string.IsNullOrEmpty(signal.EntryStrategy))
+        {
+            message += $@"
+
+📈 ENTRY: {signal.EntryStrategy}";
+        }
+
+        if (!string.IsNullOrEmpty(signal.ExitStrategy))
+        {
+            message += $@"
+
+📉 EXIT: {signal.ExitStrategy}";
+        }
+
+        // Livelli tecnici se disponibili
+        if (signal.SupportLevel.HasValue && signal.ResistanceLevel.HasValue &&
+            signal.SupportLevel > 0 && signal.ResistanceLevel > 0)
+        {
+            message += $@"
+
+📈 LEVELS:
+• Support: {currency}{signal.SupportLevel:F2}
+• Resistance: {currency}{signal.ResistanceLevel:F2}";
+        }
+
+        // Context di mercato
+        if (!string.IsNullOrEmpty(signal.MarketCondition))
+        {
+            message += $@"
+
+🌊 Market: {signal.MarketCondition}";
+        }
+
+        message += $@"
+
+🕐 STATUS: {marketStatus}
+🕐 {DateTime.Now:HH:mm} {modeEmoji} (Smart Strategy)";
+
+        return message;
+    }
+    private string GetCurrencySymbol(string symbol, string market)
+    {
+        if (symbol.Contains(".MI") || symbol.Contains(".AS") ||
+            symbol.Contains(".DE") || symbol.Contains(".PA"))
+            return "€";
+
+        if (symbol.Contains(".SW"))
+            return "CHF ";
+
+        if (symbol.Contains(".L"))
+            return "£";
+
+        return "$";
+    }
     // 🔍 AGGIUNGI questo metodo temporaneo al Worker.cs per debug:
 
     // Metodo temporaneo per debug - chiamalo una volta per controllare la situazione

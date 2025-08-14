@@ -21,6 +21,7 @@ public class SimplifiedEnhancedWorker : BackgroundService
     private int _strongSignals = 0;
     private int _mediumSignals = 0;
     private int _warningSignals = 0;
+    private int _dataDrivenSignals = 0; // 🆕 NUOVO: Counter per segnali data-driven
     private DateTime _lastOptimization = DateTime.MinValue;
 
     public SimplifiedEnhancedWorker(
@@ -45,11 +46,12 @@ public class SimplifiedEnhancedWorker : BackgroundService
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
-        _logger.LogInformation("🚀 Enhanced Trading System v2.0 SIMPLIFIED - Started!");
+        _logger.LogInformation("🚀 Enhanced Trading System v2.0 with DATA-DRIVEN Take Profit - Started!");
         _logger.LogInformation("✅ Multi-confluence signal analysis");
         _logger.LogInformation("✅ Smart risk management with ATR");
         _logger.LogInformation("✅ Structural support/resistance detection");
         _logger.LogInformation("✅ Enhanced market context analysis");
+        _logger.LogInformation("🧠 DATA-DRIVEN Take Profit optimization"); // 🆕 NUOVO
 
         // Initialize watchlist
         var watchlistCount = await _mongo.GetWatchlistCount();
@@ -80,7 +82,7 @@ public class SimplifiedEnhancedWorker : BackgroundService
                     continue;
                 }
 
-                _logger.LogInformation($"🎯 Analyzing {symbolsToProcess.Count} symbols with enhanced logic");
+                _logger.LogInformation($"🎯 Analyzing {symbolsToProcess.Count} symbols with enhanced + data-driven logic");
 
                 // Process symbols with enhanced analysis
                 var processedCount = 0;
@@ -121,6 +123,9 @@ public class SimplifiedEnhancedWorker : BackgroundService
                 var cycleTime = (DateTime.UtcNow - cycleStartTime).TotalSeconds;
                 _logger.LogInformation($"📈 Cycle completed in {cycleTime:F1}s: " +
                     $"{processedCount} analyzed, {signalsSentThisCycle} signals sent");
+
+                // 🆕 NUOVO: Aggiorna performance tracking every hour
+                await CheckHourlyMaintenance();
 
                 // Daily optimization
                 await CheckDailyOptimization();
@@ -207,8 +212,8 @@ public class SimplifiedEnhancedWorker : BackgroundService
 
                 if (shouldSend)
                 {
-                    // 5. Apply enhanced risk management
-                    signal = await _enhancedRiskManagement.EnhanceSignalWithSmartRiskManagement(signal);
+                    // 🆕 5. Apply DATA-DRIVEN enhanced risk management
+                    signal = await _enhancedRiskManagement.EnhanceSignalWithDataDrivenRiskManagement(signal);
 
                     // 6. Final quality checks
                     if (PassesFinalQualityChecks(signal, watchlistSymbol))
@@ -216,14 +221,18 @@ public class SimplifiedEnhancedWorker : BackgroundService
                         // 7. Save and send
                         await _mongo.SaveSignalAsync(signal);
 
-                        var message = FormatEnhancedMessage(signal, analysisMode, watchlistSymbol);
+                        var message = FormatDataDrivenEnhancedMessage(signal, analysisMode, watchlistSymbol);
                         await _telegram.SendMessageAsync(message);
                         await _enhancedSignalFilter.MarkSignalAsSentAsync(signal.Id);
 
                         _signalsSent++;
 
+                        // 🆕 NUOVO: Log con info data-driven
+                        var dataDrivenInfo = !string.IsNullOrEmpty(signal.TakeProfitStrategy) ?
+                            $" | Strategy: {signal.TakeProfitStrategy}" : "";
+
                         _logger.LogInformation($"✅ Enhanced {signal.Type} signal sent for {watchlistSymbol.Symbol}: " +
-                            $"Confidence: {signal.Confidence}%, R/R: 1:{signal.RiskRewardRatio:F1}");
+                            $"Confidence: {signal.Confidence}%, R/R: 1:{signal.RiskRewardRatio:F1}{dataDrivenInfo}");
 
                         // Update symbol performance
                         await UpdateSymbolAnalysisTime(watchlistSymbol.Symbol, analysisMode, true);
@@ -330,7 +339,8 @@ public class SimplifiedEnhancedWorker : BackgroundService
         return true;
     }
 
-    private string FormatEnhancedMessage(TradingSignal signal, AnalysisMode mode, WatchlistSymbol symbol)
+    // 🆕 NUOVO: Messaggio potenziato con info data-driven
+    private string FormatDataDrivenEnhancedMessage(TradingSignal signal, AnalysisMode mode, WatchlistSymbol symbol)
     {
         var modeEmoji = mode switch
         {
@@ -360,11 +370,27 @@ public class SimplifiedEnhancedWorker : BackgroundService
         var currency = GetCurrencySymbol(signal.Symbol, symbol.Market ?? "US");
         var marketStatus = _smartMarketHours.GetModeDescription(mode, signal.Symbol);
 
-        var title = $"{modeEmoji} {signalEmoji} {signal.Type.ToString().ToUpper()} {signal.Symbol} {marketFlag}";
+        // 🆕 NUOVO: Indicator data-driven
+        var dataDrivenIndicator = !string.IsNullOrEmpty(signal.TakeProfitStrategy) ? " 🧠" : "";
+        var title = $"{modeEmoji} {signalEmoji} {signal.Type.ToString().ToUpper()} {signal.Symbol} {marketFlag}{dataDrivenIndicator}";
 
         var message = $@"{title}
 
-🎯 Confidence: {signal.Confidence}% | {signal.MarketCondition}
+🎯 Confidence: {signal.Confidence}% | {signal.MarketCondition}";
+
+        // 🆕 NUOVO: Aggiungi info strategia se disponibile
+        if (!string.IsNullOrEmpty(signal.TakeProfitStrategy))
+        {
+            message += $@"
+🧠 TP Strategy: {signal.TakeProfitStrategy}";
+
+            if (signal.PredictedSuccessProbability.HasValue)
+            {
+                message += $" ({signal.PredictedSuccessProbability:F0}% success rate)";
+            }
+        }
+
+        message += $@"
 📊 RSI: {signal.RSI:F1} | MACD: {signal.MACD_Histogram:F3}
 💰 Entry: {currency}{signal.Price:F2}
 📈 Volume: {FormatVolume(signal.Volume)} ({signal.VolumeStrength:F1}/10)
@@ -387,16 +413,26 @@ public class SimplifiedEnhancedWorker : BackgroundService
         }
 
         // Add enhanced strategy info
+        if (!string.IsNullOrEmpty(signal.EntryStrategy))
+        {
+            message += $@"
+
+🎯 ENTRY: {signal.EntryStrategy}";
+        }
+
+        if (!string.IsNullOrEmpty(signal.ExitStrategy))
+        {
+            message += $@"
+
+🚪 EXIT: {signal.ExitStrategy}";
+        }
+
         message += $@"
-
-🎯 ENTRY: {signal.EntryStrategy}
-
-🚪 EXIT: {signal.ExitStrategy}
 
 🕐 STATUS: {marketStatus}
 💡 {signal.Reason}
 
-⏰ {DateTime.Now:HH:mm} {modeEmoji} Enhanced v2.0";
+⏰ {DateTime.Now:HH:mm} {modeEmoji} Enhanced v2.0{dataDrivenIndicator}";
 
         return message;
     }
@@ -414,6 +450,40 @@ public class SimplifiedEnhancedWorker : BackgroundService
 
         var nextAnalysis = DateTime.UtcNow.Add(baseFrequency);
         await _symbolSelection.UpdateSymbolNextAnalysis(symbol, nextAnalysis);
+    }
+
+    // 🆕 NUOVO: Manutenzione oraria per performance tracking
+    private async Task CheckHourlyMaintenance()
+    {
+        if (DateTime.Now.Minute == 0) // All'inizio di ogni ora
+        {
+            try
+            {
+                await _enhancedRiskManagement.UpdateDataDrivenPerformance();
+
+                // Report settimanale (lunedì mattina)
+                if (DateTime.Now.DayOfWeek == DayOfWeek.Monday && DateTime.Now.Hour == 9)
+                {
+                    var insights = await _enhancedRiskManagement.GetDataDrivenInsights();
+                    if (insights.HasSufficientData)
+                    {
+                        var reportMessage = $"📊 WEEKLY TP INSIGHTS:\n" +
+                                           $"Analyzed: {insights.AnalyzedRecords} trades\n" +
+                                           $"Top recommendations:\n" +
+                                           string.Join("\n", insights.Recommendations.Take(3).Select(r => $"• {r}"));
+
+                        await _telegram.SendMessageAsync(reportMessage);
+                        _logger.LogInformation("📈 Weekly Take Profit insights sent");
+                    }
+                }
+
+                _logger.LogInformation("⏰ Hourly maintenance completed");
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error in hourly maintenance");
+            }
+        }
     }
 
     private async Task CheckDailyOptimization()
@@ -448,6 +518,7 @@ public class SimplifiedEnhancedWorker : BackgroundService
         }
     }
 
+    // 🆕 AGGIORNATO: Counter per segnali data-driven
     private void UpdatePerformanceCounters(TradingSignal signal)
     {
         if (signal?.Type == SignalType.Buy)
@@ -459,8 +530,15 @@ public class SimplifiedEnhancedWorker : BackgroundService
         {
             _warningSignals++;
         }
+
+        // 🆕 NUOVO: Counter per segnali data-driven
+        if (!string.IsNullOrEmpty(signal?.TakeProfitStrategy))
+        {
+            _dataDrivenSignals++;
+        }
     }
 
+    // 🆕 AGGIORNATO: Performance log con info data-driven
     private void LogDailyPerformance()
     {
         _logger.LogInformation("📊 DAILY PERFORMANCE SUMMARY:");
@@ -469,14 +547,18 @@ public class SimplifiedEnhancedWorker : BackgroundService
         _logger.LogInformation($"  Strong signals: {_strongSignals}");
         _logger.LogInformation($"  Medium signals: {_mediumSignals}");
         _logger.LogInformation($"  Warning signals: {_warningSignals}");
+        _logger.LogInformation($"  Data-driven signals: {_dataDrivenSignals}"); // 🆕 NUOVO
 
         if (_totalAnalyzed > 0)
         {
             var signalRate = (_signalsSent * 100.0) / _totalAnalyzed;
+            var dataDrivenRate = (_dataDrivenSignals * 100.0) / Math.Max(_signalsSent, 1);
             _logger.LogInformation($"  Signal generation rate: {signalRate:F1}%");
+            _logger.LogInformation($"  Data-driven rate: {dataDrivenRate:F1}%"); // 🆕 NUOVO
         }
     }
 
+    // 🆕 AGGIORNATO: Reset con nuovo counter
     private void ResetDailyCounters()
     {
         _totalAnalyzed = 0;
@@ -484,6 +566,7 @@ public class SimplifiedEnhancedWorker : BackgroundService
         _strongSignals = 0;
         _mediumSignals = 0;
         _warningSignals = 0;
+        _dataDrivenSignals = 0; // 🆕 NUOVO
     }
 
     private string GetCurrencySymbol(string symbol, string market)

@@ -1,4 +1,6 @@
-﻿using Microsoft.Extensions.Hosting.WindowsServices;
+﻿using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Hosting.WindowsServices;
+using PortfolioSignalWorker.Models;
 using PortfolioSignalWorker.Services;
 
 // Determine content root for Windows Service
@@ -11,6 +13,25 @@ var builder = Host.CreateDefaultBuilder(args)
     .UseWindowsService()
     .ConfigureServices((context, services) =>
     {
+
+        services.AddSingleton<DataDrivenTakeProfitService>(provider =>
+        {
+            var mongo = provider.GetRequiredService<MongoService>();
+            var yahooFinance = provider.GetRequiredService<YahooFinanceService>();
+            var logger = provider.GetRequiredService<ILogger<DataDrivenTakeProfitService>>();
+            return new DataDrivenTakeProfitService(mongo.GetDatabase(), yahooFinance, logger);
+        });
+
+        // Take Profit Performance Tracker
+        services.AddSingleton<TakeProfitPerformanceTracker>(provider =>
+        {
+            var mongo = provider.GetRequiredService<MongoService>();
+            var yahooFinance = provider.GetRequiredService<YahooFinanceService>();
+            var logger = provider.GetRequiredService<ILogger<TakeProfitPerformanceTracker>>();
+            return new TakeProfitPerformanceTracker(mongo.GetDatabase(), yahooFinance, logger);
+        });
+
+
         // ===== CORE SERVICES =====
         services.AddSingleton<YahooFinanceService>();
         services.AddSingleton<TelegramService>();
@@ -35,7 +56,9 @@ var builder = Host.CreateDefaultBuilder(args)
             var yahooFinance = provider.GetRequiredService<YahooFinanceService>();
             var logger = provider.GetRequiredService<ILogger<SimplifiedEnhancedRiskManagementService>>();
             var config = provider.GetRequiredService<IConfiguration>();
-            return new SimplifiedEnhancedRiskManagementService(mongo.GetDatabase(), yahooFinance, logger, config);
+            var dataDrivenTP = provider.GetRequiredService<DataDrivenTakeProfitService>();
+            var performanceTracker = provider.GetRequiredService<TakeProfitPerformanceTracker>();
+            return new SimplifiedEnhancedRiskManagementService(mongo.GetDatabase(), yahooFinance, logger, config,dataDrivenTP, performanceTracker);
         });
 
         // Symbol Selection Service (existing)

@@ -1,5 +1,6 @@
 ﻿using MongoDB.Driver;
 using PortfolioSignalWorker.Models;
+using static PortfolioSignalWorker.Models.TradingSignal;
 
 namespace PortfolioSignalWorker.Services
 {
@@ -9,16 +10,22 @@ namespace PortfolioSignalWorker.Services
         private readonly YahooFinanceService _yahooFinance;
         private readonly ILogger<SimplifiedEnhancedRiskManagementService> _logger;
         private readonly EnhancedRiskSettings _settings;
+        private readonly DataDrivenTakeProfitService _dataDrivenTP;
+        private readonly TakeProfitPerformanceTracker _performanceTracker;
 
         public SimplifiedEnhancedRiskManagementService(
             IMongoDatabase database,
             YahooFinanceService yahooFinance,
             ILogger<SimplifiedEnhancedRiskManagementService> logger,
-            IConfiguration config)
+            IConfiguration config,
+            DataDrivenTakeProfitService dataDrivenTP = null,
+            TakeProfitPerformanceTracker performanceTracker = null)
         {
             _indicatorCollection = database.GetCollection<StockIndicator>("Indicators");
             _yahooFinance = yahooFinance;
             _logger = logger;
+            _dataDrivenTP = dataDrivenTP;
+            _performanceTracker = performanceTracker;
 
             // Load settings from config
             _settings = new EnhancedRiskSettings
@@ -34,55 +41,100 @@ namespace PortfolioSignalWorker.Services
             };
         }
 
-        public async Task<TradingSignal> EnhanceSignalWithSmartRiskManagement(TradingSignal signal)
+        public async Task<TradingSignal> EnhanceSignalWithDataDrivenRiskManagement(TradingSignal signal)
         {
             try
             {
-                _logger.LogInformation($"🎯 Calculating smart risk management for {signal.Symbol} at ${signal.Price}");
+                _logger.LogInformation($"🧠 Calculating DATA-DRIVEN risk management for {signal.Symbol}");
 
-                // 1. Analisi volatilità (ATR)
-                var atrData = await CalculateATRAnalysis(signal.Symbol);
-                signal.ATR = atrData.atr;
+                // 1. Calcola ATR e livelli strutturali (i tuoi metodi esistenti)
+                var atrAnalysis = await CalculateATRAnalysis(signal.Symbol);
+                var structuralLevels = await CalculateStructuralLevels(signal.Symbol, signal.Price);
 
-                // 2. Analisi supporti e resistenze strutturali
-                var levels = await CalculateStructuralLevels(signal.Symbol, signal.Price);
-                signal.SupportLevel = levels.support;
-                signal.ResistanceLevel = levels.resistance;
-
-                // 3. Calcolo stop loss intelligente
-                var stopLossResult = CalculateIntelligentStopLoss(signal.Price, atrData, levels, signal.Confidence);
+                // 2. Calcola Stop Loss intelligente (il tuo metodo esistente)
+                var stopLossResult = CalculateIntelligentStopLoss(signal.Price, atrAnalysis, structuralLevels, signal.Confidence);
                 signal.StopLoss = stopLossResult.price;
                 signal.StopLossPercent = stopLossResult.percent;
 
-                // 4. Calcolo take profit ottimizzato
-                var takeProfitResult = CalculateOptimizedTakeProfit(signal.Price, stopLossResult, levels, signal.Confidence);
-                signal.TakeProfit = takeProfitResult.price;
-                signal.TakeProfitPercent = takeProfitResult.percent;
-
-                // 5. Risk/Reward ratio
-                var risk = signal.Price - signal.StopLoss.Value;
-                var reward = signal.TakeProfit.Value - signal.Price;
-                signal.RiskRewardRatio = risk > 0 ? reward / risk : 0;
-
-                // 6. Assicurati che R/R sia accettabile
-                if (signal.RiskRewardRatio < _settings.MinRiskRewardRatio)
+                // 3. 🆕 NUOVO: Calcola Take Profit DATA-DRIVEN
+                if (_dataDrivenTP != null && signal.StopLoss.HasValue)
                 {
-                    // Aggiusta take profit per raggiungere R/R minimo
-                    signal.TakeProfit = signal.Price + (risk * _settings.MinRiskRewardRatio);
-                    signal.TakeProfitPercent = ((signal.TakeProfit.Value - signal.Price) / signal.Price) * 100;
-                    signal.RiskRewardRatio = _settings.MinRiskRewardRatio;
+                    try
+                    {
+                        var dataDrivenResult = await _dataDrivenTP.CalculateOptimalTakeProfit(
+                            signal.Symbol,
+                            signal.Price,
+                            signal.StopLoss.Value,
+                            signal.Type,
+                            signal.Confidence);
 
-                    _logger.LogInformation($"⚖️ Adjusted take profit for {signal.Symbol} to meet R/R ratio: ${signal.TakeProfit:F2}");
+                        // Applica il take profit ottimale
+                        signal.TakeProfit = dataDrivenResult.OptimalTakeProfit.Price;
+                        signal.TakeProfitPercent = dataDrivenResult.OptimalTakeProfit.Percentage;
+
+                        // Aggiorna risk/reward
+                        var risk = signal.Price - signal.StopLoss.Value;
+                        var reward = signal.TakeProfit.Value - signal.Price;
+                        signal.RiskRewardRatio = risk > 0 ? reward / risk : 0;
+
+                        // 🆕 Aggiungi info per tracking
+                        signal.TakeProfitStrategy = dataDrivenResult.OptimalTakeProfit.Strategy;
+                        signal.TakeProfitDataSource = dataDrivenResult.OptimalTakeProfit.DataSource;
+                        signal.PredictedSuccessProbability = dataDrivenResult.OptimalTakeProfit.ProbabilityOfSuccess;
+
+                        // 🆕 Avvia performance tracking
+                        if (_performanceTracker != null)
+                        {
+                            var trackingId = await _performanceTracker.TrackNewTakeProfit(
+                                signal.Symbol,
+                                signal.Type,
+                                signal.Confidence,
+                                signal.Price,
+                                signal.StopLoss.Value,
+                                dataDrivenResult.OptimalTakeProfit);
+
+                            signal.PerformanceTrackingId = trackingId.ToString();
+                        }
+
+                        _logger.LogInformation($"✅ DATA-DRIVEN TP: {dataDrivenResult.OptimalTakeProfit.Strategy} - " +
+                            $"${dataDrivenResult.OptimalTakeProfit.Price:F2} ({dataDrivenResult.OptimalTakeProfit.Percentage:F1}%)");
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.LogWarning(ex, "Data-driven TP failed for {symbol}, using fallback", signal.Symbol);
+
+                        // Fallback al metodo esistente
+                        var takeProfitResult = CalculateOptimizedTakeProfit(signal.Price, stopLossResult, structuralLevels, signal.Confidence);
+                        signal.TakeProfit = takeProfitResult.price;
+                        signal.TakeProfitPercent = takeProfitResult.percent;
+                    }
+                }
+                else
+                {
+                    // Fallback al tuo metodo esistente
+                    var takeProfitResult = CalculateOptimizedTakeProfit(signal.Price, stopLossResult, structuralLevels, signal.Confidence);
+                    signal.TakeProfit = takeProfitResult.price;
+                    signal.TakeProfitPercent = takeProfitResult.percent;
+                    _logger.LogInformation($"📊 Using optimized TP calculation for {signal.Symbol}");
                 }
 
-                // 7. Genera strategie entry/exit
-                signal.EntryStrategy = GenerateSmartEntryStrategy(signal, atrData, levels);
-                signal.ExitStrategy = GenerateSmartExitStrategy(signal, atrData, levels);
+                // Assicurati che RiskRewardRatio sia calcolato
+                if (signal.StopLoss.HasValue && signal.TakeProfit.HasValue)
+                {
+                    var risk = signal.Price - signal.StopLoss.Value;
+                    var reward = signal.TakeProfit.Value - signal.Price;
+                    signal.RiskRewardRatio = risk > 0 ? reward / risk : 0;
+                }
 
-                // 8. Contesto di mercato avanzato
+                // 4. Context avanzato e strategie (i tuoi metodi esistenti)
                 await EnhanceWithAdvancedMarketContext(signal);
 
-                _logger.LogInformation($"✅ Smart risk management for {signal.Symbol}: " +
+                // 5. 🆕 Strategie avanzate di entrata/uscita (metodi che hai già)
+                signal.EntryStrategy = GenerateDataDrivenEntryStrategy(signal);
+                signal.ExitStrategy = GenerateDataDrivenExitStrategy(signal);
+
+                // 6. Log finale
+                _logger.LogInformation($"🎯 Risk Management completed for {signal.Symbol}: " +
                     $"SL: ${signal.StopLoss:F2} ({signal.StopLossPercent:F1}%), " +
                     $"TP: ${signal.TakeProfit:F2} ({signal.TakeProfitPercent:F1}%), " +
                     $"R/R: 1:{signal.RiskRewardRatio:F1}");
@@ -91,11 +143,153 @@ namespace PortfolioSignalWorker.Services
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "Error in smart risk management for {symbol}", signal.Symbol);
+                _logger.LogError(ex, "Error in data-driven risk management for {symbol}", signal.Symbol);
+
+                // Fallback completo
                 ApplyFallbackRiskLevels(signal);
                 return signal;
             }
         }
+        public async Task<TradingSignal> EnhanceSignalWithSmartRiskManagement(TradingSignal signal)
+        {
+            // Se hai i servizi data-driven, usa quello avanzato
+            if (_dataDrivenTP != null)
+            {
+                return await EnhanceSignalWithDataDrivenRiskManagement(signal);
+            }
+
+            // Altrimenti usa il metodo tradizionale
+            return await EnhanceSignalWithSimplifiedRiskManagement(signal);
+        }
+        public async Task<TradingSignal> EnhanceSignalWithSimplifiedRiskManagement(TradingSignal signal)
+        {
+            try
+            {
+                _logger.LogInformation($"📊 Calculating simplified risk management for {signal.Symbol}");
+
+                // Calcola ATR e livelli
+                var atrAnalysis = await CalculateATRAnalysis(signal.Symbol);
+                var structuralLevels = await CalculateStructuralLevels(signal.Symbol, signal.Price);
+
+                // Stop Loss
+                var stopLossResult = CalculateIntelligentStopLoss(signal.Price, atrAnalysis, structuralLevels, signal.Confidence);
+                signal.StopLoss = stopLossResult.price;
+                signal.StopLossPercent = stopLossResult.percent;
+
+                // Take Profit
+                var takeProfitResult = CalculateOptimizedTakeProfit(signal.Price, stopLossResult, structuralLevels, signal.Confidence);
+                signal.TakeProfit = takeProfitResult.price;
+                signal.TakeProfitPercent = takeProfitResult.percent;
+
+                // Risk/Reward
+                var risk = signal.Price - signal.StopLoss.Value;
+                var reward = signal.TakeProfit.Value - signal.Price;
+                signal.RiskRewardRatio = risk > 0 ? reward / risk : 0;
+
+                // Market context e strategie
+                await EnhanceWithAdvancedMarketContext(signal);
+                signal.EntryStrategy = GenerateSmartEntryStrategy(signal, atrAnalysis, structuralLevels);
+                signal.ExitStrategy = GenerateSmartExitStrategy(signal, atrAnalysis, structuralLevels);
+
+                _logger.LogInformation($"📈 Simplified risk management for {signal.Symbol}: " +
+                    $"SL: ${signal.StopLoss:F2}, TP: ${signal.TakeProfit:F2}, R/R: 1:{signal.RiskRewardRatio:F1}");
+
+                return signal;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error in simplified risk management for {symbol}", signal.Symbol);
+                ApplyFallbackRiskLevels(signal);
+                return signal;
+            }
+        }
+        // 🆕 STRATEGIE AVANZATE SEMPLIFICATE
+        private string GenerateDataDrivenEntryStrategy(TradingSignal signal)
+        {
+            var strategies = new List<string>();
+
+            // Strategia basata su confidence
+            if (signal.Confidence >= 85)
+            {
+                strategies.Add("🚀 HIGH CONFIDENCE - Market order");
+            }
+            else if (signal.Confidence >= 70)
+            {
+                strategies.Add("📈 GOOD - Limit order 0.2% below");
+            }
+            else
+            {
+                strategies.Add("⚖️ MODERATE - Wait for better entry");
+            }
+
+            // Strategia basata su Take Profit type
+            if (signal.TakeProfitStrategy?.Contains("Technical") == true)
+            {
+                strategies.Add("🎯 Technical setup - Execute on breakout");
+            }
+            else if (signal.TakeProfitStrategy?.Contains("Volatility") == true)
+            {
+                strategies.Add("🌊 Volatility play - Quick execution");
+            }
+
+            return string.Join(" | ", strategies);
+        }
+
+        private string GenerateDataDrivenExitStrategy(TradingSignal signal)
+        {
+            var strategies = new List<string>();
+
+            // Exit principale
+            strategies.Add($"🛑 SL: ${signal.StopLoss:F2} ({signal.StopLossPercent:F1}%)");
+            strategies.Add($"🎯 TP: ${signal.TakeProfit:F2} ({signal.TakeProfitPercent:F1}%)");
+
+            // Strategia basata su confidence
+            if (signal.Confidence >= 90 && signal.TakeProfitPercent >= 12.0)
+            {
+                var partial = signal.Price * 1.06; // +6%
+                strategies.Add($"📊 Partial exit: 50% at ${partial:F2}");
+            }
+
+            // Strategia basata su R/R
+            if (signal.RiskRewardRatio >= 3.0)
+            {
+                strategies.Add($"⭐ Excellent R/R (1:{signal.RiskRewardRatio:F1}) - Hold full target");
+            }
+            else if (signal.RiskRewardRatio >= 2.0)
+            {
+                strategies.Add($"✅ Good R/R (1:{signal.RiskRewardRatio:F1}) - Standard exit");
+            }
+
+            // Trailing stop per high confidence
+            if (signal.Confidence >= 80)
+            {
+                strategies.Add($"🔄 Trail stop after +{signal.TakeProfitPercent / 3:F0}%");
+            }
+
+            return string.Join(" | ", strategies);
+        }
+
+        // 🆕 METODO PER AGGIORNARE PERFORMANCE (chiamalo dal Worker)
+        public async Task UpdateDataDrivenPerformance()
+        {
+            if (_performanceTracker != null)
+            {
+                _logger.LogInformation("🔄 Updating data-driven TP performance...");
+                await _performanceTracker.UpdateActiveTracking();
+            }
+        }
+
+        // 🆕 METODO PER OTTENERE INSIGHTS
+        public async Task<TakeProfitInsights> GetDataDrivenInsights()
+        {
+            if (_performanceTracker != null)
+            {
+                return await _performanceTracker.GenerateStrategicInsights();
+            }
+
+            return new TakeProfitInsights { HasSufficientData = false };
+        }
+
 
         private async Task<ATRAnalysis> CalculateATRAnalysis(string symbol)
         {
@@ -269,11 +463,11 @@ namespace PortfolioSignalWorker.Services
             };
         }
 
-        private TakeProfitResult CalculateOptimizedTakeProfit(
-            double currentPrice,
-            StopLossResult stopLoss,
-            StructuralLevels levels,
-            double confidence)
+        private SimplifiedTakeProfitData CalculateOptimizedTakeProfit(
+    double currentPrice,
+    StopLossResult stopLoss,
+    StructuralLevels levels,
+    double confidence)
         {
             var risk = currentPrice - stopLoss.price;
             var takeProfitOptions = new List<(double price, string method, double score)>();
@@ -322,7 +516,7 @@ namespace PortfolioSignalWorker.Services
 
             _logger.LogDebug($"Take profit for {currentPrice:F2}: ${bestTarget.price:F2} ({targetPercent:F1}%) via {bestTarget.method}");
 
-            return new TakeProfitResult
+            return new SimplifiedTakeProfitData
             {
                 price = bestTarget.price,
                 percent = targetPercent,
@@ -389,14 +583,14 @@ namespace PortfolioSignalWorker.Services
             }
 
             // Partial profit taking per alta confidence
-            if (signal.Confidence >= 90)
+            if (signal.Confidence >= 90 && signal.TakeProfit.HasValue)
             {
                 var partialTarget = signal.Price + ((signal.TakeProfit.Value - signal.Price) * 0.6);
                 strategies.Add($"💰 Take 50% profit at ${partialTarget:F2}");
             }
 
             // Resistance warnings
-            if (levels.resistance > 0 && levels.resistance < signal.TakeProfit.Value * 1.1)
+            if (levels.resistance > 0 && signal.TakeProfit.HasValue && levels.resistance < signal.TakeProfit.Value * 1.1)
             {
                 strategies.Add($"⚠️ Watch resistance at ${levels.resistance:F2}");
             }
@@ -562,7 +756,7 @@ namespace PortfolioSignalWorker.Services
         public string method { get; set; }
     }
 
-    public class TakeProfitResult
+    public class SimplifiedTakeProfitData
     {
         public double price { get; set; }
         public double percent { get; set; }

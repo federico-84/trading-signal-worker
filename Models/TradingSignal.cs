@@ -5,6 +5,85 @@ namespace PortfolioSignalWorker.Models
 {
     public class TradingSignal
     {
+        public enum SimplifiedTakeProfitResult
+        {
+            Hit,           // Take profit raggiunto
+            StoppedOut,    // Stop loss attivato
+            PartialHit,    // Parzialmente raggiunto
+            Expired,       // Signal scaduto senza azione
+            ManualExit     // Uscita manuale
+        }
+
+        // Modelli per insights
+        public class TakeProfitInsights
+        {
+            public bool HasSufficientData { get; set; }
+            public int AnalyzedRecords { get; set; }
+            public int AnalysisPeriodDays { get; set; }
+            public DateTime GeneratedAt { get; set; }
+
+            public List<ConfidenceInsight> ConfidenceInsights { get; set; } = new();
+            public List<SignalTypeInsight> SignalTypeInsights { get; set; } = new();
+            public TimingInsight TimingInsights { get; set; } = new();
+            public List<PriceRangeInsight> PriceRangeInsights { get; set; } = new();
+            public List<string> PatternInsights { get; set; } = new();
+            public List<string> Recommendations { get; set; } = new();
+        }
+
+        public class ConfidenceInsight
+        {
+            public double MinConfidence { get; set; }
+            public double MaxConfidence { get; set; }
+            public int TotalSignals { get; set; }
+            public double SuccessRate { get; set; }
+            public double AverageReturn { get; set; }
+            public double AverageHoldingPeriod { get; set; }
+        }
+
+        public class SignalTypeInsight
+        {
+            public SignalType SignalType { get; set; }
+            public int TotalSignals { get; set; }
+            public double SuccessRate { get; set; }
+            public double AverageReturn { get; set; }
+            public string BestStrategy { get; set; }
+        }
+
+        public class TimingInsight
+        {
+            public double AverageSuccessfulHoldingPeriod { get; set; }
+            public double AverageFailedHoldingPeriod { get; set; }
+            public (int min, int max) OptimalHoldingPeriodRange { get; set; }
+            public double QuickWinsPercentage { get; set; }
+        }
+
+        public class PriceRangeInsight
+        {
+            public string RangeName { get; set; }
+            public int TotalSignals { get; set; }
+            public double SuccessRate { get; set; }
+            public double AverageReturn { get; set; }
+        } 
+
+        // 🆕 NUOVI CAMPI PER TAKE PROFIT DATA-DRIVEN
+        public string TakeProfitStrategy { get; set; }          // Nome strategia utilizzata
+        public string TakeProfitDataSource { get; set; }       // Fonte dati per decisione
+        public double? PredictedSuccessProbability { get; set; } // Probabilità di successo predetta
+        public string PerformanceTrackingId { get; set; }      // ID per tracking performance
+
+        // Dettagli analisi data-driven
+        public double? HistoricalAverageMove { get; set; }      // Movimento medio storico
+        public string VolatilityRegime { get; set; }           // Regime di volatilità
+        public double? TechnicalResistancePrice { get; set; }   // Prezzo resistenza tecnica
+        public double? ConfidenceAdjustedTarget { get; set; }    
+
+         
+
+        // Alternative targets per strategie avanzate
+        public double? PartialTakeProfit1 { get; set; }        // Primo target parziale
+        public double? PartialTakeProfit2 { get; set; }        // Secondo target parziale
+        public string StagedExitPlan { get; set; }
+
         [BsonId]
         public ObjectId Id { get; set; }
 
