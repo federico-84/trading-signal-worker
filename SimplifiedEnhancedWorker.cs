@@ -342,6 +342,7 @@ public class SimplifiedEnhancedWorker : BackgroundService
     // 🆕 NUOVO: Messaggio potenziato con info data-driven
     private string FormatDataDrivenEnhancedMessage(TradingSignal signal, AnalysisMode mode, WatchlistSymbol symbol)
     {
+        return _telegram.FormatTradingSignalMessage(signal, mode, symbol);
         var modeEmoji = mode switch
         {
             AnalysisMode.FullAnalysis => "🟢",
