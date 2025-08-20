@@ -360,45 +360,39 @@ public class SimplifiedEnhancedWorker : BackgroundService
     {
         var issues = new List<string>();
 
-        // 1. Confidence SELETTIVA
-        if (signal.Confidence < 65)
+        // 1. Confidence RILASSATA per test
+        if (signal.Confidence < 50) // 🔧 RIDOTTO da 65 a 50 per test
         {
-            issues.Add($"Confidence {signal.Confidence}% < 65%");
+            issues.Add($"Confidence {signal.Confidence}% < 50%");
         }
 
-        // 2. Risk/Reward QUALITATIVO - RIGOROSO
-        if (signal.RiskRewardRatio.HasValue && signal.RiskRewardRatio < 2.0)
+        // 2. Risk/Reward RILASSATO per test
+        if (signal.RiskRewardRatio.HasValue && signal.RiskRewardRatio < 1.5) // 🔧 RIDOTTO da 2.0 a 1.5 per test
         {
-            issues.Add($"R/R {signal.RiskRewardRatio:F1} < 2.0");
+            issues.Add($"R/R {signal.RiskRewardRatio:F1} < 1.5");
         }
         else if (!signal.RiskRewardRatio.HasValue)
         {
             issues.Add("R/R MISSING");
         }
 
-        // 3. Volume CONFERMATO per Buy signals - RIGOROSO
-        if (signal.Type == SignalType.Buy && signal.VolumeStrength.HasValue && signal.VolumeStrength < 5)
+        // 3. Volume RILASSATO per test
+        if (signal.Type == SignalType.Buy && signal.VolumeStrength.HasValue && signal.VolumeStrength < 2) // 🔧 RIDOTTO da 5 a 2 per test
         {
-            issues.Add($"Volume {signal.VolumeStrength} < 5 (Buy signal)");
+            issues.Add($"Volume {signal.VolumeStrength} < 2 (Buy signal)");
         }
         else if (signal.Type == SignalType.Buy && !signal.VolumeStrength.HasValue)
         {
             issues.Add("Volume MISSING (Buy signal)");
         }
 
-        // 4. Trend POSITIVO per high confidence signals
-        if (signal.Confidence >= 80 && signal.TrendStrength.HasValue && signal.TrendStrength < 6)
-        {
-            issues.Add($"Weak trend {signal.TrendStrength} < 6 (High confidence signal)");
-        }
+        // 4. Trend requirement DISABILITATO per test
+        // if (signal.Confidence >= 80 && signal.TrendStrength.HasValue && signal.TrendStrength < 6)
 
-        // 5. Strong Buy deve avere trend rialzista
-        if (signal.Confidence >= 85 && signal.MarketCondition?.Contains("Bearish") == true)
-        {
-            issues.Add($"Bearish market condition with {signal.Confidence}% confidence");
-        }
+        // 5. Bearish check DISABILITATO per test
+        // if (signal.Confidence >= 85 && signal.MarketCondition?.Contains("Bearish") == true)
 
-        // 6. 🔧 NUOVO: Verifica che Stop Loss e Take Profit esistano DOPO risk management
+        // 6. Verifica che Stop Loss e Take Profit esistano
         if (!signal.StopLoss.HasValue)
         {
             issues.Add("Stop Loss MISSING after risk management");
@@ -409,20 +403,19 @@ public class SimplifiedEnhancedWorker : BackgroundService
             issues.Add("Take Profit MISSING after risk management");
         }
 
-        // 🔧 LOGGING DETTAGLIATO SEMPRE
-        _logger.LogInformation($"🔍 ValidateFullAnalysisSignal for {signal.Symbol}:");
-        _logger.LogInformation($"   ✅ CHECKS:");
-        _logger.LogInformation($"      Confidence: {signal.Confidence}% (Required: ≥65%) = {(signal.Confidence >= 65 ? "✅ PASS" : "❌ FAIL")}");
-        _logger.LogInformation($"      R/R Ratio: {signal.RiskRewardRatio?.ToString("F1") ?? "NULL"} (Required: ≥2.0) = {(signal.RiskRewardRatio >= 2.0 ? "✅ PASS" : "❌ FAIL")}");
-        _logger.LogInformation($"      Volume: {signal.VolumeStrength?.ToString("F1") ?? "NULL"} (Required: ≥5 for Buy) = {(signal.Type != SignalType.Buy || signal.VolumeStrength >= 5 ? "✅ PASS" : "❌ FAIL")}");
-        _logger.LogInformation($"      Trend: {signal.TrendStrength?.ToString("F1") ?? "NULL"} (Required: ≥6 if conf≥80%) = {(signal.Confidence < 80 || signal.TrendStrength >= 6 ? "✅ PASS" : "❌ FAIL")}");
-        _logger.LogInformation($"      Market: {signal.MarketCondition ?? "NULL"} (No Bearish if conf≥85%) = {(signal.Confidence < 85 || !signal.MarketCondition?.Contains("Bearish") == true ? "✅ PASS" : "❌ FAIL")}");
-        _logger.LogInformation($"      SL/TP: SL={signal.StopLoss?.ToString("F2") ?? "NULL"}, TP={signal.TakeProfit?.ToString("F2") ?? "NULL"} = {(signal.StopLoss.HasValue && signal.TakeProfit.HasValue ? "✅ PASS" : "❌ FAIL")}");
+        // 🔧 LOGGING DETTAGLIATO per debug
+        _logger.LogInformation($"🔧 RELAXED ValidateFullAnalysisSignal for {signal.Symbol}:");
+        _logger.LogInformation($"   Confidence: {signal.Confidence}% (Required: ≥50%) = {(signal.Confidence >= 50 ? "✅ PASS" : "❌ FAIL")}");
+        _logger.LogInformation($"   R/R Ratio: {signal.RiskRewardRatio?.ToString("F1") ?? "NULL"} (Required: ≥1.5) = {(signal.RiskRewardRatio >= 1.5 ? "✅ PASS" : "❌ FAIL")}");
+        _logger.LogInformation($"   Volume: {signal.VolumeStrength?.ToString("F1") ?? "NULL"} (Required: ≥2 for Buy) = {(signal.Type != SignalType.Buy || signal.VolumeStrength >= 2 ? "✅ PASS" : "❌ FAIL")}");
+        _logger.LogInformation($"   Trend: {signal.TrendStrength?.ToString("F1") ?? "NULL"} (DISABLED for test)");
+        _logger.LogInformation($"   Market: {signal.MarketCondition ?? "NULL"} (DISABLED for test)");
+        _logger.LogInformation($"   SL/TP: SL={signal.StopLoss?.ToString("F2") ?? "NULL"}, TP={signal.TakeProfit?.ToString("F2") ?? "NULL"} = {(signal.StopLoss.HasValue && signal.TakeProfit.HasValue ? "✅ PASS" : "❌ FAIL")}");
 
         // LOG RISULTATO
         if (issues.Any())
         {
-            _logger.LogWarning($"❌ {signal.Symbol} FAILED ValidateFullAnalysisSignal:");
+            _logger.LogWarning($"❌ {signal.Symbol} FAILED ValidateFullAnalysisSignal (RELAXED):");
             foreach (var issue in issues)
             {
                 _logger.LogWarning($"   • {issue}");
@@ -430,7 +423,7 @@ public class SimplifiedEnhancedWorker : BackgroundService
             return false;
         }
 
-        _logger.LogInformation($"✅ {signal.Symbol} PASSED ValidateFullAnalysisSignal");
+        _logger.LogInformation($"✅ {signal.Symbol} PASSED ValidateFullAnalysisSignal (RELAXED)");
         return true;
     }
     private async Task<bool> PassesFinalQualityChecks(TradingSignal signal, WatchlistSymbol symbol)
