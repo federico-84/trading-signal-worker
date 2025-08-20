@@ -633,17 +633,92 @@ public class SimplifiedEnhancedWorker : BackgroundService
 
     private async Task UpdateSymbolAnalysisTime(string symbol, AnalysisMode mode, bool signalGenerated)
     {
-        // Calculate next analysis time based on mode and performance
-        var baseFrequency = _smartMarketHours.GetAnalysisFrequency(mode, SymbolTier.Tier2_Standard);
+        DateTime nextAnalysis;
 
-        // Adjust frequency based on whether signal was generated
-        if (signalGenerated)
+        switch (mode)
         {
-            baseFrequency = TimeSpan.FromTicks((long)(baseFrequency.Ticks * 1.5)); // Wait longer after signal
+            case AnalysisMode.FullAnalysis:
+                // 🟢 Mercato aperto - usa frequenza normale
+                var frequency = _smartMarketHours.GetAnalysisFrequency(mode, SymbolTier.Tier2_Standard);
+                if (signalGenerated)
+                {
+                    frequency = TimeSpan.FromTicks((long)(frequency.Ticks * 1.5)); // Wait longer after signal
+                }
+                nextAnalysis = DateTime.UtcNow.Add(frequency);
+                break;
+
+            case AnalysisMode.PreMarketWatch:
+                // 🟡 Pre-market - analisi frequente
+                nextAnalysis = DateTime.UtcNow.AddMinutes(signalGenerated ? 60 : 30);
+                break;
+
+            case AnalysisMode.OffHoursMonitor:
+            case AnalysisMode.Skip:
+                // 🔧 CRITICO: Quando mercato chiuso, analizza all'APERTURA del mercato!
+                nextAnalysis = CalculateNextMarketOpenTime(symbol);
+                break;
+
+            default:
+                nextAnalysis = DateTime.UtcNow.AddHours(2);
+                break;
         }
 
-        var nextAnalysis = DateTime.UtcNow.Add(baseFrequency);
+        // 🔧 NUOVO: Log della decisione
+        var timeDiff = nextAnalysis - DateTime.UtcNow;
+        _logger.LogDebug($"⏰ {symbol} next analysis: {nextAnalysis:HH:mm:ss} " +
+            $"(in {timeDiff.TotalMinutes:F0}m) - Mode: {mode}");
+
         await _symbolSelection.UpdateSymbolNextAnalysis(symbol, nextAnalysis);
+    }
+
+    private DateTime CalculateNextMarketOpenTime(string symbol)
+    {
+        try
+        {
+            var utcNow = DateTime.UtcNow;
+            var isOpen = _smartMarketHours.IsMarketOpen(symbol);
+
+            if (isOpen)
+            {
+                // Se il mercato è aperto ora, analizza tra 2 ore
+                return utcNow.AddHours(2);
+            }
+
+            var timeUntilOpen = _smartMarketHours.GetTimeUntilMarketOpen(symbol);
+            var marketOpenTime = utcNow.Add(timeUntilOpen);
+
+            // 🔧 STRATEGIA INTELLIGENTE per NextAnalysis:
+            if (timeUntilOpen.TotalHours <= 2)
+            {
+                // 🟡 Mercato apre tra meno di 2 ore → Analizza 5 minuti DOPO l'apertura
+                var analysisTime = marketOpenTime.AddMinutes(5);
+                _logger.LogInformation($"📅 {symbol}: Market opens in {timeUntilOpen.TotalMinutes:F0}m, " +
+                    $"scheduling analysis for {analysisTime:HH:mm:ss} (5m after open)");
+                return analysisTime;
+            }
+            else if (timeUntilOpen.TotalHours <= 12)
+            {
+                // 🟠 Mercato apre tra 2-12 ore → Analizza 30 minuti prima dell'apertura (pre-market)
+                var preMarketTime = marketOpenTime.AddMinutes(-30);
+                _logger.LogInformation($"📅 {symbol}: Market opens in {timeUntilOpen.TotalHours:F1}h, " +
+                    $"scheduling pre-market analysis for {preMarketTime:HH:mm:ss}");
+                return preMarketTime;
+            }
+            else
+            {
+                // 🚫 Mercato apre tra più di 12 ore (weekend) → Analizza 2 ore prima dell'apertura
+                var weekendPrep = marketOpenTime.AddHours(-2);
+                _logger.LogInformation($"📅 {symbol}: Market opens in {timeUntilOpen.TotalHours:F1}h (weekend), " +
+                    $"scheduling weekend prep for {weekendPrep:HH:mm:ss}");
+                return weekendPrep;
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, $"Error calculating next market open for {symbol}");
+            // Fallback: analizza tra 1 ora
+            return DateTime.UtcNow.AddHours(1);
+        }
     }
 
     // 🆕 NUOVO: Manutenzione oraria per performance tracking

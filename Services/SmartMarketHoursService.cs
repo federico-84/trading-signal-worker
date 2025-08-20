@@ -65,15 +65,15 @@ namespace PortfolioSignalWorker.Services
             {
                 AnalysisMode.FullAnalysis => tier switch
                 {
-                    SymbolTier.Tier1_Priority => TimeSpan.FromMinutes(30),
-                    SymbolTier.Tier2_Standard => TimeSpan.FromHours(2),
-                    SymbolTier.Tier3_Monitor => TimeSpan.FromHours(4),
-                    _ => TimeSpan.FromHours(4)
+                    SymbolTier.Tier1_Priority => TimeSpan.FromMinutes(30),      // Unchanged
+                    SymbolTier.Tier2_Standard => TimeSpan.FromHours(1),         // 🔧 RIDOTTO da 2 a 1 ora
+                    SymbolTier.Tier3_Monitor => TimeSpan.FromHours(2),          // 🔧 RIDOTTO da 4 a 2 ore
+                    _ => TimeSpan.FromHours(2)
                 },
-                AnalysisMode.PreMarketWatch => TimeSpan.FromMinutes(45),  // Più frequente in pre-market
-                AnalysisMode.OffHoursMonitor => TimeSpan.FromHours(6),    // Meno frequente off-hours
-                AnalysisMode.Skip => TimeSpan.FromDays(1),                // Skip fino al giorno dopo
-                _ => TimeSpan.FromHours(4)
+                AnalysisMode.PreMarketWatch => TimeSpan.FromMinutes(30),        // 🔧 RIDOTTO da 45 a 30 minuti
+                AnalysisMode.OffHoursMonitor => TimeSpan.Zero,                  // 🔧 IGNORATO - usa CalculateNextMarketOpenTime
+                AnalysisMode.Skip => TimeSpan.Zero,                             // 🔧 IGNORATO - usa CalculateNextMarketOpenTime
+                _ => TimeSpan.FromHours(2)
             };
         }
 
