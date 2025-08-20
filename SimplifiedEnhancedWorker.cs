@@ -181,70 +181,55 @@ public class SimplifiedEnhancedWorker : BackgroundService
     }
 
     private async Task<(bool signalSent, TradingSignal signal)> ProcessSymbolWithEnhancedLogic(
-        WatchlistSymbol watchlistSymbol, AnalysisMode analysisMode)
+    WatchlistSymbol watchlistSymbol, AnalysisMode analysisMode)
     {
         try
         {
             // 1. Get indicators with enhanced calculations
             _logger.LogDebug($"🔍 Getting indicators for {watchlistSymbol.Symbol}");
             var indicator = await _yahooFinance.GetIndicatorsAsync(watchlistSymbol.Symbol);
-            _logger.LogDebug($"🔍 Got indicators: RSI={indicator.RSI:F1}, MACD={indicator.MACD_Histogram:F3}");
 
             // 2. Enhanced signal analysis with confluence
             _logger.LogDebug($"🔍 Starting enhanced analysis for {watchlistSymbol.Symbol}");
             var signal = await _enhancedSignalFilter.AnalyzeEnhancedSignalAsync(watchlistSymbol.Symbol, indicator);
-
-            if (signal != null)
-            {
-                _logger.LogInformation($"🎯 Signal generated for {watchlistSymbol.Symbol}: {signal.Type} (Confidence: {signal.Confidence}%)");
-            }
-            else
-            {
-                _logger.LogDebug($"🔍 No signal generated for {watchlistSymbol.Symbol}");
-            }
 
             // 3. Save indicator data
             await _mongo.SaveIndicatorAsync(indicator);
 
             if (signal != null)
             {
-                // 🔧 SICUREZZA: Controlla che signal sia valido prima di qualsiasi operazione
+                _logger.LogInformation($"🎯 Signal generated for {watchlistSymbol.Symbol}: {signal.Type} (Confidence: {signal.Confidence}%)");
+
                 try
                 {
+                    // 🔧 NUOVO ORDINE: 4. Apply Risk Management PRIMA delle validazioni!
+                    _logger.LogInformation($"🧠 Calculating DATA-DRIVEN risk management for {watchlistSymbol.Symbol}");
+                    signal = await _enhancedRiskManagement.EnhanceSignalWithDataDrivenRiskManagement(signal);
+
+                    if (signal == null)
+                    {
+                        _logger.LogWarning($"⚠️ Signal for {watchlistSymbol.Symbol} became NULL after risk management");
+                        return (false, null);
+                    }
+
+                    // Log DOPO il risk management
+                    _logger.LogInformation($"🎯 Risk Management completed for {watchlistSymbol.Symbol}: " +
+                        $"SL: ${signal.StopLoss?.ToString("F2") ?? "NULL"} ({signal.StopLossPercent?.ToString("F1") ?? "NULL"}%), " +
+                        $"TP: ${signal.TakeProfit?.ToString("F2") ?? "NULL"} ({signal.TakeProfitPercent?.ToString("F1") ?? "NULL"}%), " +
+                        $"R/R: 1:{signal.RiskRewardRatio?.ToString("F1") ?? "NULL"}");
+
+                    // 5. DOPO risk management: Log validation details
                     LogSignalValidationDetails(signal, analysisMode);
 
-                    // 4. Validate signal based on analysis mode
+                    // 6. DOPO risk management: Validate signal based on analysis mode  
                     var shouldSend = ValidateSignalForMode(signal, analysisMode);
                     _logger.LogInformation($"🔍 ValidateSignalForMode result for {watchlistSymbol.Symbol}: {shouldSend}");
 
                     if (shouldSend)
                     {
-                        // 🆕 5. Apply DATA-DRIVEN enhanced risk management
-                        try
-                        {
-                            signal = await _enhancedRiskManagement.EnhanceSignalWithDataDrivenRiskManagement(signal);
-
-                            if (signal == null)
-                            {
-                                _logger.LogWarning($"⚠️ Signal for {watchlistSymbol.Symbol} became NULL after risk management");
-                                return (false, null);
-                            }
-
-                            // Log after risk management
-                            _logger.LogInformation($"🔍 After Risk Management - StopLoss: {signal.StopLoss:F2}, TakeProfit: {signal.TakeProfit:F2}");
-                        }
-                        catch (Exception ex)
-                        {
-                            _logger.LogError(ex, $"💥 Risk Management failed for {watchlistSymbol.Symbol}");
-                            return (false, signal);
-                        }
-
-                        // 6. Final quality checks
-                      
-
-
+                        // 7. Final quality checks
                         var passesQualityChecks = await PassesFinalQualityChecks(signal, watchlistSymbol);
-                         _logger.LogInformation($"🔍 PassesFinalQualityChecks result for {watchlistSymbol.Symbol}: {passesQualityChecks}");
+                        _logger.LogInformation($"🔍 PassesFinalQualityChecks result for {watchlistSymbol.Symbol}: {passesQualityChecks}");
 
                         if (passesQualityChecks)
                         {
@@ -253,7 +238,7 @@ public class SimplifiedEnhancedWorker : BackgroundService
 
                             try
                             {
-                                // 7. Save and send
+                                // 8. Save and send
                                 await _mongo.SaveSignalAsync(signal);
                                 var message = FormatDataDrivenEnhancedMessage(signal, analysisMode, watchlistSymbol);
                                 await _telegram.SendMessageAsync(message);
@@ -261,7 +246,7 @@ public class SimplifiedEnhancedWorker : BackgroundService
 
                                 _signalsSent++;
 
-                                // 🆕 NUOVO: Log con info data-driven
+                                // Log con info data-driven
                                 var dataDrivenInfo = !string.IsNullOrEmpty(signal.TakeProfitStrategy) ?
                                     $" | Strategy: {signal.TakeProfitStrategy}" : "";
 
@@ -291,7 +276,7 @@ public class SimplifiedEnhancedWorker : BackgroundService
                 }
                 catch (Exception ex)
                 {
-                    _logger.LogError(ex, $"💥 Error during signal validation for {watchlistSymbol.Symbol}");
+                    _logger.LogError(ex, $"💥 Error during risk management or validation for {watchlistSymbol.Symbol}");
                     return (false, signal);
                 }
             }
@@ -310,6 +295,7 @@ public class SimplifiedEnhancedWorker : BackgroundService
             return (false, null);
         }
     }
+
     private void LogSignalValidationDetails(TradingSignal signal, AnalysisMode mode)
     {
         if (signal == null)
@@ -319,33 +305,34 @@ public class SimplifiedEnhancedWorker : BackgroundService
         }
 
         _logger.LogInformation($"🔍 QUALITY VALIDATION for {signal.Symbol ?? "UNKNOWN"}:");
-        _logger.LogInformation($"   Type: {signal.Type}, Confidence: {signal.Confidence}% (Threshold: 65%)");
+        _logger.LogInformation($"   Type: {signal.Type}, Confidence: {signal.Confidence}%");
         _logger.LogInformation($"   Mode: {mode}");
-        _logger.LogInformation($"   Price: €{signal.Price:F2}");
+        _logger.LogInformation($"   Price: ${signal.Price:F2}");
 
-        // Controlli qualità specifici
-        _logger.LogInformation($"   StopLoss: {(signal.StopLoss?.ToString("F2") ?? "MISSING")} ({(signal.StopLossPercent?.ToString("F1") ?? "NULL")}%)");
-        _logger.LogInformation($"   TakeProfit: {(signal.TakeProfit?.ToString("F2") ?? "MISSING")} ({(signal.TakeProfitPercent?.ToString("F1") ?? "NULL")}%)");
+        // 🔧 MIGLIORATO: Controlli post risk-management
+        _logger.LogInformation($"   StopLoss: ${(signal.StopLoss?.ToString("F2") ?? "MISSING")} ({(signal.StopLossPercent?.ToString("F1") ?? "NULL")}%)");
+        _logger.LogInformation($"   TakeProfit: ${(signal.TakeProfit?.ToString("F2") ?? "MISSING")} ({(signal.TakeProfitPercent?.ToString("F1") ?? "NULL")}%)");
         _logger.LogInformation($"   R/R Ratio: {(signal.RiskRewardRatio?.ToString("F1") ?? "NULL")} (Required: 2.0+)");
-        _logger.LogInformation($"   Volume Strength: {(signal.VolumeStrength?.ToString("F1") ?? "NULL")} (Required: 5+)");
-        _logger.LogInformation($"   Trend Strength: {(signal.TrendStrength?.ToString("F1") ?? "NULL")}");
+        _logger.LogInformation($"   Volume Strength: {(signal.VolumeStrength?.ToString("F1") ?? "NULL")} (Required: 5+ for Buy)");
+        _logger.LogInformation($"   Trend Strength: {(signal.TrendStrength?.ToString("F1") ?? "NULL")} (Required: 6+ for high confidence)");
 
         // Livelli tecnici
-        _logger.LogInformation($"   Support Level: €{(signal.SupportLevel?.ToString("F2") ?? "NULL")}");
-        _logger.LogInformation($"   Resistance Level: €{(signal.ResistanceLevel?.ToString("F2") ?? "NULL")}");
+        _logger.LogInformation($"   Support Level: ${(signal.SupportLevel?.ToString("F2") ?? "NULL")}");
+        _logger.LogInformation($"   Resistance Level: ${(signal.ResistanceLevel?.ToString("F2") ?? "NULL")}");
 
         var threshold = _smartMarketHours.GetConfidenceThreshold(mode);
         _logger.LogInformation($"   Mode Threshold: {threshold}%");
 
-        // Motivo del segnale
+        // Motivo del segnale e strategia
         _logger.LogInformation($"   Reason: {signal.Reason ?? "No reason specified"}");
+        _logger.LogInformation($"   TP Strategy: {signal.TakeProfitStrategy ?? "Standard"}");
 
-        // Validazione qualità
-        _logger.LogInformation($"   ✅ QUALITY CHECKS:");
-        _logger.LogInformation($"      Confidence ≥ 65%: {(signal.Confidence >= 65 ? "PASS" : "FAIL")}");
-        _logger.LogInformation($"      R/R ≥ 2.0: {(signal.RiskRewardRatio >= 2.0 ? "PASS" : signal.RiskRewardRatio?.ToString() ?? "NULL")}");
-        _logger.LogInformation($"      Volume ≥ 5: {(signal.VolumeStrength >= 5 ? "PASS" : signal.VolumeStrength?.ToString() ?? "NULL")}");
-        _logger.LogInformation($"      Valid Levels: {(signal.StopLoss < signal.Price && signal.TakeProfit > signal.Price ? "PASS" : "FAIL")}");
+        // 🔧 NUOVO: Validazione realtime per debugging
+        _logger.LogInformation($"   ✅ VALIDATION CHECKS:");
+        _logger.LogInformation($"      Confidence ≥ 65%: {(signal.Confidence >= 65 ? "✅ PASS" : "❌ FAIL")}");
+        _logger.LogInformation($"      R/R ≥ 2.0: {(signal.RiskRewardRatio >= 2.0 ? "✅ PASS" : $"❌ FAIL ({signal.RiskRewardRatio?.ToString() ?? "NULL"})")}");
+        _logger.LogInformation($"      Volume ≥ 5: {(signal.Type != SignalType.Buy || signal.VolumeStrength >= 5 ? "✅ PASS" : $"❌ FAIL ({signal.VolumeStrength?.ToString() ?? "NULL"})")}");
+        _logger.LogInformation($"      SL/TP Present: {(signal.StopLoss.HasValue && signal.TakeProfit.HasValue ? "✅ PASS" : "❌ FAIL")}");
     }
     private bool ValidateSignalForMode(TradingSignal signal, AnalysisMode mode)
     {
@@ -375,44 +362,89 @@ public class SimplifiedEnhancedWorker : BackgroundService
 
     private bool ValidateFullAnalysisSignal(TradingSignal signal)
     {
-        // 🔧 VALIDATION SELETTIVA per segnali di qualità
+        var issues = new List<string>();
 
         // 1. Confidence SELETTIVA
-        if (signal.Confidence < 65) // 🔧 Soglia alta per qualità
+        if (signal.Confidence < 65)
         {
-            _logger.LogDebug($"Signal rejected: confidence {signal.Confidence}% < 65% (quality threshold)");
-            return false;
+            issues.Add($"Confidence {signal.Confidence}% < 65%");
         }
 
-        // 2. Risk/Reward QUALITATIVO - RIGOROSO
-        if (signal.RiskRewardRatio.HasValue && signal.RiskRewardRatio < 2.0) // 🔧 Standard alto
+        // 2. Risk/Reward QUALITATIVO - con gestione NULL
+        if (signal.RiskRewardRatio.HasValue)
         {
-            _logger.LogDebug($"Signal rejected: poor R/R ratio ({signal.RiskRewardRatio:F1}) - quality standard");
-            return false;
+            if (signal.RiskRewardRatio < 2.0)
+            {
+                issues.Add($"R/R {signal.RiskRewardRatio:F1} < 2.0");
+            }
+        }
+        else
+        {
+            // 🔧 NUOVO: Se R/R è NULL DOPO risk management = errore critico
+            issues.Add("R/R MISSING after risk management");
         }
 
-        // 3. Volume CONFERMATO per Buy signals - RIGOROSO
-        if (signal.Type == SignalType.Buy && signal.VolumeStrength.HasValue && signal.VolumeStrength < 5) // 🔧 Standard alto
+        // 3. Volume per Buy signals - con gestione NULL
+        if (signal.Type == SignalType.Buy)
         {
-            _logger.LogDebug($"Buy signal rejected: insufficient volume ({signal.VolumeStrength}) - quality standard");
-            return false;
+            if (signal.VolumeStrength.HasValue)
+            {
+                if (signal.VolumeStrength < 5)
+                {
+                    issues.Add($"Volume {signal.VolumeStrength} < 5 (Buy signal)");
+                }
+            }
+            else
+            {
+                issues.Add("Volume MISSING (Buy signal)");
+            }
         }
 
-        // 4. Trend POSITIVO per high confidence signals
-        if (signal.Confidence >= 80 && signal.TrendStrength.HasValue && signal.TrendStrength < 6) // 🔧 Rigoroso
+        // 4. Trend per high confidence - con gestione NULL  
+        if (signal.Confidence >= 80)
         {
-            _logger.LogDebug($"High confidence signal rejected: weak trend ({signal.TrendStrength}) - quality standard");
-            return false;
+            if (signal.TrendStrength.HasValue)
+            {
+                if (signal.TrendStrength < 6)
+                {
+                    issues.Add($"Weak trend {signal.TrendStrength} < 6 (High confidence signal)");
+                }
+            }
+            else
+            {
+                issues.Add("Trend strength MISSING (High confidence signal)");
+            }
         }
 
-        // 5. 🔧 NUOVO: Strong Buy deve avere trend rialzista
+        // 5. Market condition per Strong Buy
         if (signal.Confidence >= 85 && signal.MarketCondition?.Contains("Bearish") == true)
         {
-            _logger.LogDebug($"Strong Buy rejected: bearish trend inconsistent with high confidence");
+            issues.Add($"Bearish market condition with {signal.Confidence}% confidence");
+        }
+
+        // 6. 🔧 NUOVO: Verifica che Stop Loss e Take Profit esistano DOPO risk management
+        if (!signal.StopLoss.HasValue)
+        {
+            issues.Add("Stop Loss MISSING after risk management");
+        }
+
+        if (!signal.TakeProfit.HasValue)
+        {
+            issues.Add("Take Profit MISSING after risk management");
+        }
+
+        // LOG RISULTATO
+        if (issues.Any())
+        {
+            _logger.LogWarning($"❌ {signal.Symbol} FAILED ValidateFullAnalysisSignal:");
+            foreach (var issue in issues)
+            {
+                _logger.LogWarning($"   • {issue}");
+            }
             return false;
         }
 
-        _logger.LogDebug($"✅ {signal.Symbol}: Passed QUALITY validation standards");
+        _logger.LogInformation($"✅ {signal.Symbol} PASSED ValidateFullAnalysisSignal");
         return true;
     }
     private async Task<bool> PassesFinalQualityChecks(TradingSignal signal, WatchlistSymbol symbol)
@@ -478,15 +510,18 @@ public class SimplifiedEnhancedWorker : BackgroundService
                 return false;
             }
 
-            // 6. 🔧 CORRETTO: Check daily limits
-            var dailySignalCount = await GetDailySignalCount();
-            if (dailySignalCount >= 10) // Max 10 segnali al giorno
-            {
-                _logger.LogWarning($"Daily signal limit reached: {dailySignalCount}/10 - maintaining quality");
-                return false;
-            }
+            // 🔧 RIMOSSO: Check daily limits globali 
+            // var dailySignalCount = await GetDailySignalCount();
+            // if (dailySignalCount >= 10) // RIMOSSO: Non più limite globale!
+            // {
+            //     _logger.LogWarning($"Daily signal limit reached: {dailySignalCount}/10 - maintaining quality");
+            //     return false;
+            // }
 
-            _logger.LogDebug($"✅ {signal.Symbol}: Passed RIGOROUS final quality checks");
+            // ✅ Il limite per simbolo è già gestito in IsSymbolEligibleForSignal nel SimplifiedEnhancedSignalFilterService
+            // Non servono controlli aggiuntivi qui
+
+            _logger.LogDebug($"✅ {signal.Symbol}: Passed RIGOROUS final quality checks (NO GLOBAL LIMIT)");
             return true;
         }
         catch (Exception ex)
@@ -495,31 +530,7 @@ public class SimplifiedEnhancedWorker : BackgroundService
             return false;
         }
     }
-    private async Task<int> GetDailySignalCount()
-    {
-        try
-        {
-            var today = DateTime.UtcNow.Date;
-            var tomorrow = today.AddDays(1);
-
-            // 🔧 CORRETTO: Usa il metodo giusto del MongoService
-            var signalCollection = _mongo.GetDatabase().GetCollection<TradingSignal>("TradingSignals");
-
-            var filter = Builders<TradingSignal>.Filter.And(
-                Builders<TradingSignal>.Filter.Gte(x => x.CreatedAt, today),
-                Builders<TradingSignal>.Filter.Lt(x => x.CreatedAt, tomorrow),
-                Builders<TradingSignal>.Filter.Eq(x => x.Sent, true)
-            );
-
-            return (int)await signalCollection.CountDocumentsAsync(filter);
-        }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex, "Error counting daily signals");
-            return 0; // In caso di errore, permetti il segnale
-        }
-    }
-
+     
 
     // 🆕 NUOVO: Messaggio potenziato con info data-driven
     private string FormatDataDrivenEnhancedMessage(TradingSignal signal, AnalysisMode mode, WatchlistSymbol symbol)
@@ -726,18 +737,19 @@ public class SimplifiedEnhancedWorker : BackgroundService
     {
         _logger.LogInformation("📊 DAILY PERFORMANCE SUMMARY:");
         _logger.LogInformation($"  Symbols analyzed: {_totalAnalyzed}");
-        _logger.LogInformation($"  Total signals sent: {_signalsSent}");
+        _logger.LogInformation($"  Total signals sent: {_signalsSent} (NO GLOBAL LIMIT ✅)");
         _logger.LogInformation($"  Strong signals: {_strongSignals}");
         _logger.LogInformation($"  Medium signals: {_mediumSignals}");
         _logger.LogInformation($"  Warning signals: {_warningSignals}");
-        _logger.LogInformation($"  Data-driven signals: {_dataDrivenSignals}"); // 🆕 NUOVO
+        _logger.LogInformation($"  Data-driven signals: {_dataDrivenSignals}");
 
         if (_totalAnalyzed > 0)
         {
             var signalRate = (_signalsSent * 100.0) / _totalAnalyzed;
             var dataDrivenRate = (_dataDrivenSignals * 100.0) / Math.Max(_signalsSent, 1);
             _logger.LogInformation($"  Signal generation rate: {signalRate:F1}%");
-            _logger.LogInformation($"  Data-driven rate: {dataDrivenRate:F1}%"); // 🆕 NUOVO
+            _logger.LogInformation($"  Data-driven rate: {dataDrivenRate:F1}%");
+            _logger.LogInformation($"  🎯 LIMIT POLICY: Max 2 signals per symbol per day, NO global limit");
         }
     }
 
