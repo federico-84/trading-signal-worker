@@ -313,8 +313,11 @@ public class SimplifiedEnhancedWorker : BackgroundService
         _logger.LogInformation($"   StopLoss: ${(signal.StopLoss?.ToString("F2") ?? "MISSING")} ({(signal.StopLossPercent?.ToString("F1") ?? "NULL")}%)");
         _logger.LogInformation($"   TakeProfit: ${(signal.TakeProfit?.ToString("F2") ?? "MISSING")} ({(signal.TakeProfitPercent?.ToString("F1") ?? "NULL")}%)");
         _logger.LogInformation($"   R/R Ratio: {(signal.RiskRewardRatio?.ToString("F1") ?? "NULL")} (Required: 2.0+)");
+
+        // 🔧 CRITICO: Log i valori che spesso causano fallimenti
         _logger.LogInformation($"   Volume Strength: {(signal.VolumeStrength?.ToString("F1") ?? "NULL")} (Required: 5+ for Buy)");
-        _logger.LogInformation($"   Trend Strength: {(signal.TrendStrength?.ToString("F1") ?? "NULL")} (Required: 6+ for high confidence)");
+        _logger.LogInformation($"   Trend Strength: {(signal.TrendStrength?.ToString("F1") ?? "NULL")} (Required: 6+ if conf≥80%)");
+        _logger.LogInformation($"   Market Condition: {signal.MarketCondition ?? "NULL"}");
 
         // Livelli tecnici
         _logger.LogInformation($"   Support Level: ${(signal.SupportLevel?.ToString("F2") ?? "NULL")}");
@@ -326,14 +329,8 @@ public class SimplifiedEnhancedWorker : BackgroundService
         // Motivo del segnale e strategia
         _logger.LogInformation($"   Reason: {signal.Reason ?? "No reason specified"}");
         _logger.LogInformation($"   TP Strategy: {signal.TakeProfitStrategy ?? "Standard"}");
-
-        // 🔧 NUOVO: Validazione realtime per debugging
-        _logger.LogInformation($"   ✅ VALIDATION CHECKS:");
-        _logger.LogInformation($"      Confidence ≥ 65%: {(signal.Confidence >= 65 ? "✅ PASS" : "❌ FAIL")}");
-        _logger.LogInformation($"      R/R ≥ 2.0: {(signal.RiskRewardRatio >= 2.0 ? "✅ PASS" : $"❌ FAIL ({signal.RiskRewardRatio?.ToString() ?? "NULL"})")}");
-        _logger.LogInformation($"      Volume ≥ 5: {(signal.Type != SignalType.Buy || signal.VolumeStrength >= 5 ? "✅ PASS" : $"❌ FAIL ({signal.VolumeStrength?.ToString() ?? "NULL"})")}");
-        _logger.LogInformation($"      SL/TP Present: {(signal.StopLoss.HasValue && signal.TakeProfit.HasValue ? "✅ PASS" : "❌ FAIL")}");
     }
+
     private bool ValidateSignalForMode(TradingSignal signal, AnalysisMode mode)
     {
         var threshold = _smartMarketHours.GetConfidenceThreshold(mode);
@@ -359,7 +356,6 @@ public class SimplifiedEnhancedWorker : BackgroundService
             _ => true
         };
     }
-
     private bool ValidateFullAnalysisSignal(TradingSignal signal)
     {
         var issues = new List<string>();
@@ -370,53 +366,33 @@ public class SimplifiedEnhancedWorker : BackgroundService
             issues.Add($"Confidence {signal.Confidence}% < 65%");
         }
 
-        // 2. Risk/Reward QUALITATIVO - con gestione NULL
-        if (signal.RiskRewardRatio.HasValue)
+        // 2. Risk/Reward QUALITATIVO - RIGOROSO
+        if (signal.RiskRewardRatio.HasValue && signal.RiskRewardRatio < 2.0)
         {
-            if (signal.RiskRewardRatio < 2.0)
-            {
-                issues.Add($"R/R {signal.RiskRewardRatio:F1} < 2.0");
-            }
+            issues.Add($"R/R {signal.RiskRewardRatio:F1} < 2.0");
         }
-        else
+        else if (!signal.RiskRewardRatio.HasValue)
         {
-            // 🔧 NUOVO: Se R/R è NULL DOPO risk management = errore critico
-            issues.Add("R/R MISSING after risk management");
+            issues.Add("R/R MISSING");
         }
 
-        // 3. Volume per Buy signals - con gestione NULL
-        if (signal.Type == SignalType.Buy)
+        // 3. Volume CONFERMATO per Buy signals - RIGOROSO
+        if (signal.Type == SignalType.Buy && signal.VolumeStrength.HasValue && signal.VolumeStrength < 5)
         {
-            if (signal.VolumeStrength.HasValue)
-            {
-                if (signal.VolumeStrength < 5)
-                {
-                    issues.Add($"Volume {signal.VolumeStrength} < 5 (Buy signal)");
-                }
-            }
-            else
-            {
-                issues.Add("Volume MISSING (Buy signal)");
-            }
+            issues.Add($"Volume {signal.VolumeStrength} < 5 (Buy signal)");
+        }
+        else if (signal.Type == SignalType.Buy && !signal.VolumeStrength.HasValue)
+        {
+            issues.Add("Volume MISSING (Buy signal)");
         }
 
-        // 4. Trend per high confidence - con gestione NULL  
-        if (signal.Confidence >= 80)
+        // 4. Trend POSITIVO per high confidence signals
+        if (signal.Confidence >= 80 && signal.TrendStrength.HasValue && signal.TrendStrength < 6)
         {
-            if (signal.TrendStrength.HasValue)
-            {
-                if (signal.TrendStrength < 6)
-                {
-                    issues.Add($"Weak trend {signal.TrendStrength} < 6 (High confidence signal)");
-                }
-            }
-            else
-            {
-                issues.Add("Trend strength MISSING (High confidence signal)");
-            }
+            issues.Add($"Weak trend {signal.TrendStrength} < 6 (High confidence signal)");
         }
 
-        // 5. Market condition per Strong Buy
+        // 5. Strong Buy deve avere trend rialzista
         if (signal.Confidence >= 85 && signal.MarketCondition?.Contains("Bearish") == true)
         {
             issues.Add($"Bearish market condition with {signal.Confidence}% confidence");
@@ -432,6 +408,16 @@ public class SimplifiedEnhancedWorker : BackgroundService
         {
             issues.Add("Take Profit MISSING after risk management");
         }
+
+        // 🔧 LOGGING DETTAGLIATO SEMPRE
+        _logger.LogInformation($"🔍 ValidateFullAnalysisSignal for {signal.Symbol}:");
+        _logger.LogInformation($"   ✅ CHECKS:");
+        _logger.LogInformation($"      Confidence: {signal.Confidence}% (Required: ≥65%) = {(signal.Confidence >= 65 ? "✅ PASS" : "❌ FAIL")}");
+        _logger.LogInformation($"      R/R Ratio: {signal.RiskRewardRatio?.ToString("F1") ?? "NULL"} (Required: ≥2.0) = {(signal.RiskRewardRatio >= 2.0 ? "✅ PASS" : "❌ FAIL")}");
+        _logger.LogInformation($"      Volume: {signal.VolumeStrength?.ToString("F1") ?? "NULL"} (Required: ≥5 for Buy) = {(signal.Type != SignalType.Buy || signal.VolumeStrength >= 5 ? "✅ PASS" : "❌ FAIL")}");
+        _logger.LogInformation($"      Trend: {signal.TrendStrength?.ToString("F1") ?? "NULL"} (Required: ≥6 if conf≥80%) = {(signal.Confidence < 80 || signal.TrendStrength >= 6 ? "✅ PASS" : "❌ FAIL")}");
+        _logger.LogInformation($"      Market: {signal.MarketCondition ?? "NULL"} (No Bearish if conf≥85%) = {(signal.Confidence < 85 || !signal.MarketCondition?.Contains("Bearish") == true ? "✅ PASS" : "❌ FAIL")}");
+        _logger.LogInformation($"      SL/TP: SL={signal.StopLoss?.ToString("F2") ?? "NULL"}, TP={signal.TakeProfit?.ToString("F2") ?? "NULL"} = {(signal.StopLoss.HasValue && signal.TakeProfit.HasValue ? "✅ PASS" : "❌ FAIL")}");
 
         // LOG RISULTATO
         if (issues.Any())
