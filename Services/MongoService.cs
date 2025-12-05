@@ -16,7 +16,7 @@ public class MongoService
     public MongoService(IConfiguration config)
     {
         var connectionString = config["Mongo:ConnectionString"] ?? config["MONGO_DEBUG"] ?? Environment.GetEnvironmentVariable("Mongo__ConnectionString");
-        Console.WriteLine($"Connection string: {connectionString}");
+        //Console.WriteLine($"Connection string: {connectionString}");
         var client = new MongoClient(connectionString);
 
         _database = client.GetDatabase(config["Mongo:Database"]);

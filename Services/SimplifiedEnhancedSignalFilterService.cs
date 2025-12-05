@@ -84,6 +84,19 @@ namespace PortfolioSignalWorker.Services
             {
                 return null;
             }
+            // 🔍 LOG DETTAGLIATO - Mostra TUTTI i valori
+            _logger.LogInformation($"🔍 QUALITY CHECK {symbol}:");
+            _logger.LogInformation($"   📊 Confluence: {enhanced.ConfluenceScore}/100");
+            _logger.LogInformation($"   📈 Trend: {enhanced.TrendDirection} (Strength: {enhanced.TrendStrength:F1})");
+            _logger.LogInformation($"   📉 RSI: {enhanced.RSI:F1}");
+            _logger.LogInformation($"   📊 MACD: {enhanced.MACD_Histogram:F3} (CrossUp: {enhanced.MACD_Histogram_CrossUp})");
+            _logger.LogInformation($"   📦 Volume: {enhanced.VolumeRatio:F2}x avg (Breakout: {enhanced.IsVolumeBreakout})");
+            _logger.LogInformation($"   🎯 Support: {enhanced.SupportLevel:F2} (Dist: {enhanced.DistanceFromSupport:F1}%)");
+            _logger.LogInformation($"   🎯 Resistance: {enhanced.ResistanceLevel:F2} (Dist: {enhanced.DistanceFromResistance:F1}%)");
+
+            // 🚀 STRONG BUY CHECK
+            var isStrongBuy = IsStrongBuySetup(enhanced);
+            _logger.LogInformation($"   🚀 Strong Buy (75+): {(isStrongBuy ? "✅ YES" : "❌ NO")}");
 
             // 🚀 STRONG BUY - Solo i migliori segnali (Score 75+)
             if (IsStrongBuySetup(enhanced))
