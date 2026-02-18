@@ -3,6 +3,7 @@ using MongoDB.Bson.Serialization.Attributes;
 
 namespace PortfolioSignalWorker.Models
 {
+    [BsonIgnoreExtraElements]
     public class WatchlistSymbol
     {
         [BsonId]
@@ -17,7 +18,7 @@ namespace PortfolioSignalWorker.Models
         // Tier Management
         public SymbolTier Tier { get; set; }
         public TimeSpan MonitoringFrequency { get; set; }
-        public DateTime LastAnalyzed { get; set; }
+        public DateTime? LastAnalyzed { get; set; }
         public DateTime NextAnalysis { get; set; }
 
         // Selection Criteria Scores
