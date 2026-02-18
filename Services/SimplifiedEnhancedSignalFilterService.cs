@@ -1,8 +1,9 @@
-﻿// SimplifiedEnhancedSignalFilterService.cs - VERSIONE FINALE BILANCIATA PER SEGNALI DI QUALITÀ
+﻿// SimplifiedEnhancedSignalFilterService.cs - CON CACHE E LOGGING
 
 using MongoDB.Bson;
 using MongoDB.Driver;
 using PortfolioSignalWorker.Models;
+using Newtonsoft.Json.Linq;
 
 namespace PortfolioSignalWorker.Services
 {
@@ -37,14 +38,14 @@ namespace PortfolioSignalWorker.Services
                     return null;
                 }
 
-                // 1. Ottieni dati storici
-                var historicalData = await GetHistoricalDataAsync(symbol, 50);
+                // 🟢 1. Ottieni dati storici CON CACHE
+                var historicalData = await GetHistoricalDataWithCacheAsync(symbol, 50);
                 _logger.LogInformation($"🔍 {symbol}: Retrieved {historicalData.Count} historical records");
 
                 if (historicalData.Count < 20)
                 {
                     _logger.LogWarning($"🔍 {symbol}: Insufficient data ({historicalData.Count} days), skipping");
-                    return null; // 🔧 No basic signals - mantieni alta qualità
+                    return null;
                 }
 
                 // 2. Calcola indicatori avanzati
@@ -70,9 +71,194 @@ namespace PortfolioSignalWorker.Services
             catch (Exception ex)
             {
                 _logger.LogError(ex, "🚨 Error in quality analysis for {symbol}", symbol);
-                return null; // No fallback - mantieni qualità
+                return null;
             }
         }
+
+        #region CACHE METHODS - NUOVO
+
+        // 🟢 METODO PRINCIPALE CON CACHE
+        private async Task<List<StockIndicator>> GetHistoricalDataWithCacheAsync(string symbol, int periods = 50)
+        {
+            try
+            {
+                _logger.LogDebug($"[CACHE] 🔍 Checking cache for {symbol}");
+
+                // STEP 1: Cerca in MongoDB PRIMA
+                var mongoData = await _indicatorCollection
+                    .Find(x => x.Symbol == symbol)
+                    .SortByDescending(x => x.CreatedAt)
+                    .Limit(periods)
+                    .ToListAsync();
+
+                // STEP 2: Cache HIT?
+                if (mongoData.Count >= 20)
+                {
+                    var lastUpdate = mongoData.First().CreatedAt;
+                    var hoursSinceUpdate = (DateTime.UtcNow - lastUpdate).TotalHours;
+
+                    // Cache valida per 4 ore
+                    if (hoursSinceUpdate < 4)
+                    {
+                        _logger.LogInformation($"[CACHE] 📦 HIT for {symbol}: {mongoData.Count} days, {hoursSinceUpdate:F1}h old");
+                        return mongoData;
+                    }
+                    else
+                    {
+                        _logger.LogInformation($"[CACHE] ⏰ STALE for {symbol}: {hoursSinceUpdate:F1}h old, refreshing...");
+                    }
+                }
+                else
+                {
+                    _logger.LogInformation($"[CACHE] 📭 MISS for {symbol}: only {mongoData.Count} days in cache");
+                }
+
+                // STEP 3: Cache miss/stale → Yahoo
+                _logger.LogInformation($"[CACHE] ☁️ Fetching from Yahoo: {symbol}");
+
+                var yahooData = await _yahooFinance.GetHistoricalDataAsync(symbol, periods);
+                var indicators = await ConvertYahooDataToIndicatorsAsync(symbol, yahooData);
+
+                if (indicators.Count == 0)
+                {
+                    _logger.LogWarning($"[CACHE] ⚠️ {symbol}: Yahoo returned 0 indicators!");
+                    // Fallback: usa cache vecchia se esiste
+                    if (mongoData?.Any() == true)
+                    {
+                        _logger.LogWarning($"[CACHE] ↩️ Using stale cache for {symbol}");
+                        return mongoData;
+                    }
+                    return new List<StockIndicator>();
+                }
+
+                // STEP 4: Salva in MongoDB (incrementale)
+                await SaveNewIndicatorsAsync(symbol, indicators);
+
+                return indicators.Take(periods).ToList();
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, $"[CACHE] 🔴 Error getting historical data for {symbol}");
+
+                // Fallback: usa cache anche se vecchia
+                var fallbackData = await _indicatorCollection
+                    .Find(x => x.Symbol == symbol)
+                    .SortByDescending(x => x.CreatedAt)
+                    .Limit(periods)
+                    .ToListAsync();
+
+                if (fallbackData?.Any() == true)
+                {
+                    _logger.LogWarning($"[CACHE] ⚠️ Using stale cache for {symbol} due to error");
+                    return fallbackData;
+                }
+
+                return new List<StockIndicator>();
+            }
+        }
+
+        // 🟢 CONVERTI DATI YAHOO IN INDICATORS
+        private async Task<List<StockIndicator>> ConvertYahooDataToIndicatorsAsync(string symbol, JObject yahooData)
+        {
+            try
+            {
+                var closes = yahooData["c"]?.ToObject<List<double>>() ?? new List<double>();
+                var volumes = yahooData["v"]?.ToObject<List<long>>() ?? new List<long>();
+                var highs = yahooData["h"]?.ToObject<List<double>>() ?? new List<double>();
+                var lows = yahooData["l"]?.ToObject<List<double>>() ?? new List<double>();
+                var opens = yahooData["o"]?.ToObject<List<double>>() ?? new List<double>();
+                var timestamps = yahooData["t"]?.ToObject<List<long>>() ?? new List<long>();
+
+                _logger.LogDebug($"[CONVERT] 🔄 Converting {closes.Count} days for {symbol}");
+
+                if (closes.Count == 0)
+                {
+                    _logger.LogWarning($"[CONVERT] ⚠️ {symbol}: No price data from Yahoo!");
+                    return new List<StockIndicator>();
+                }
+
+                var indicators = new List<StockIndicator>();
+
+                // Inizia da indice 26 (serve per MACD)
+                for (int i = 26; i < closes.Count; i++)
+                {
+                    var pricesUpToI = closes.Take(i + 1).ToList();
+                    var rsi = _yahooFinance.CalculateRSI(pricesUpToI);
+                    var (macd, signal, histogram) = _yahooFinance.CalculateMACD(pricesUpToI);
+
+                    indicators.Add(new StockIndicator
+                    {
+                        Symbol = symbol,
+                        RSI = Math.Round(rsi, 2),
+                        MACD = Math.Round(macd, 4),
+                        MACD_Signal = Math.Round(signal, 4),
+                        MACD_Histogram = Math.Round(histogram, 4),
+                        Price = closes[i],
+                        Volume = volumes[i],
+                        DayHigh = highs[i],
+                        DayLow = lows[i],
+                        Open = opens[i],
+                        PreviousClose = i > 0 ? closes[i - 1] : closes[i],
+                        Change = i > 0 ? closes[i] - closes[i - 1] : 0,
+                        ChangePercent = i > 0 && closes[i - 1] != 0 ? ((closes[i] - closes[i - 1]) / closes[i - 1]) * 100 : 0,
+                        CreatedAt = DateTimeOffset.FromUnixTimeSeconds(timestamps[i]).UtcDateTime
+                    });
+                }
+
+                _logger.LogInformation($"[CONVERT] ✅ Converted {indicators.Count} indicators for {symbol}");
+
+                return indicators;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, $"[CONVERT] 🔴 Error converting Yahoo data for {symbol}");
+                return new List<StockIndicator>();
+            }
+        }
+
+        // 🟢 SALVA SOLO NUOVI RECORDS
+        private async Task SaveNewIndicatorsAsync(string symbol, List<StockIndicator> indicators)
+        {
+            try
+            {
+                if (!indicators.Any())
+                {
+                    _logger.LogDebug($"[SAVE] ℹ️ No indicators to save for {symbol}");
+                    return;
+                }
+
+                // Trova ultimo salvato
+                var lastSaved = await _indicatorCollection
+                    .Find(x => x.Symbol == symbol)
+                    .SortByDescending(x => x.CreatedAt)
+                    .FirstOrDefaultAsync();
+
+                var lastSavedDate = lastSaved?.CreatedAt.Date ?? DateTime.MinValue;
+
+                _logger.LogDebug($"[SAVE] 💾 Last saved for {symbol}: {lastSavedDate:yyyy-MM-dd}");
+
+                // Salva solo nuovi
+                var newRecords = indicators
+                    .Where(x => x.CreatedAt.Date > lastSavedDate)
+                    .ToList();
+
+                if (newRecords.Any())
+                {
+                    await _indicatorCollection.InsertManyAsync(newRecords);
+                    _logger.LogInformation($"[SAVE] ✅ Saved {newRecords.Count} NEW records for {symbol}");
+                }
+                else
+                {
+                    _logger.LogDebug($"[SAVE] ℹ️ No new records to save for {symbol}");
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, $"[SAVE] ⚠️ Error saving indicators for {symbol}");
+            }
+        }
+
+        #endregion
 
         private async Task<TradingSignal?> GenerateQualityBasedSignal(
             string symbol,
@@ -80,11 +266,12 @@ namespace PortfolioSignalWorker.Services
             List<StockIndicator> historical)
         {
             // Controlla duplicati recenti
-            if (await HasRecentSignalAsync(symbol, TimeSpan.FromHours(6))) // 🔧 Aumentato a 6 ore
+            if (await HasRecentSignalAsync(symbol, TimeSpan.FromHours(6)))
             {
                 return null;
             }
-            // 🔍 LOG DETTAGLIATO - Mostra TUTTI i valori
+
+            // 🔍 LOG DETTAGLIATO
             _logger.LogInformation($"🔍 QUALITY CHECK {symbol}:");
             _logger.LogInformation($"   📊 Confluence: {enhanced.ConfluenceScore}/100");
             _logger.LogInformation($"   📈 Trend: {enhanced.TrendDirection} (Strength: {enhanced.TrendStrength:F1})");
@@ -94,19 +281,18 @@ namespace PortfolioSignalWorker.Services
             _logger.LogInformation($"   🎯 Support: {enhanced.SupportLevel:F2} (Dist: {enhanced.DistanceFromSupport:F1}%)");
             _logger.LogInformation($"   🎯 Resistance: {enhanced.ResistanceLevel:F2} (Dist: {enhanced.DistanceFromResistance:F1}%)");
 
-            // 🚀 STRONG BUY CHECK
             var isStrongBuy = IsStrongBuySetup(enhanced);
             _logger.LogInformation($"   🚀 Strong Buy (75+): {(isStrongBuy ? "✅ YES" : "❌ NO")}");
 
-            // 🚀 STRONG BUY - Solo i migliori segnali (Score 75+)
+            // 🚀 STRONG BUY
             if (IsStrongBuySetup(enhanced))
             {
                 return CreateEnhancedSignal(symbol, enhanced, SignalType.Buy,
-                    Math.Min(95, enhanced.ConfluenceScore + 5), // Leggero boost per strong
+                    Math.Min(95, enhanced.ConfluenceScore + 5),
                     "STRONG BUY: Excellent confluence with confirmed breakout");
             }
 
-            // 📈 MEDIUM BUY - Buoni segnali (Score 60+)
+            // 📈 MEDIUM BUY
             if (IsMediumBuySetup(enhanced))
             {
                 return CreateEnhancedSignal(symbol, enhanced, SignalType.Buy,
@@ -114,7 +300,7 @@ namespace PortfolioSignalWorker.Services
                     "MEDIUM BUY: Good technical setup with volume confirmation");
             }
 
-            // ⚠️ WARNING - Solo situazioni estreme e interessanti (Score 50+)
+            // ⚠️ WARNING
             if (IsWarningSetup(enhanced))
             {
                 return CreateEnhancedSignal(symbol, enhanced, SignalType.Warning,
@@ -129,41 +315,38 @@ namespace PortfolioSignalWorker.Services
 
         private bool IsStrongBuySetup(EnhancedIndicator enhanced)
         {
-            // 🔧 SOGLIE SELETTIVE per Strong Buy - Solo i migliori segnali
-            return enhanced.ConfluenceScore >= 75 && // Mantieni alto per qualità
-                   enhanced.TrendDirection == TrendDirection.Bullish && // 🔧 Richiedi trend rialzista
-                   enhanced.RSI >= 20 && enhanced.RSI <= 40 && // Sweet spot oversold ristretto
+            return enhanced.ConfluenceScore >= 75 &&
+                   enhanced.TrendDirection == TrendDirection.Bullish &&
+                   enhanced.RSI >= 20 && enhanced.RSI <= 40 &&
                    enhanced.MACD_Histogram > 0 &&
-                   enhanced.VolumeRatio > 1.5 && // Volume breakout confermato
-                   enhanced.DistanceFromSupport <= 5 && // Molto vicino a supporto
-                   enhanced.DistanceFromResistance > 8 && // Lontano da resistenza
-                   !enhanced.RSI_Divergence; // No negative divergence
+                   enhanced.VolumeRatio > 1.5 &&
+                   enhanced.DistanceFromSupport <= 5 &&
+                   enhanced.DistanceFromResistance > 8 &&
+                   !enhanced.RSI_Divergence;
         }
 
         private bool IsMediumBuySetup(EnhancedIndicator enhanced)
         {
-            // 🔧 SOGLIE MODERATE per Medium Buy - Buoni segnali
-            return enhanced.ConfluenceScore >= 60 && // Bilanciato per qualità
+            return enhanced.ConfluenceScore >= 60 &&
                    enhanced.TrendDirection != TrendDirection.Bearish &&
-                   enhanced.RSI >= 20 && enhanced.RSI <= 45 && // Range ristretto ma ragionevole
+                   enhanced.RSI >= 20 && enhanced.RSI <= 45 &&
                    (enhanced.MACD_Histogram > 0 || enhanced.MACD_Histogram_CrossUp) &&
-                   enhanced.VolumeRatio > 1.2; // Volume confermato
+                   enhanced.VolumeRatio > 1.2;
         }
 
         private bool IsWarningSetup(EnhancedIndicator enhanced)
         {
-            // WARNING solo per situazioni veramente estreme e interessanti
-            return enhanced.ConfluenceScore >= 50 && // Soglia più alta per WARNING
-                   (enhanced.RSI <= 25 || // Solo RSI veramente estremo
+            return enhanced.ConfluenceScore >= 50 &&
+                   (enhanced.RSI <= 25 ||
                     (enhanced.TrendDirection == TrendDirection.Bearish &&
                      enhanced.RSI <= 30 &&
-                     enhanced.VolumeRatio > 1.5)) && // Volume spike in trend negativo
-                   enhanced.DistanceFromSupport <= 3; // Molto vicino a supporto forte
+                     enhanced.VolumeRatio > 1.5)) &&
+                   enhanced.DistanceFromSupport <= 3;
         }
 
         #endregion
 
-        #region Advanced Indicators Calculation (mantenuti identici)
+        #region Advanced Indicators Calculation
 
         private async Task<EnhancedIndicator> CalculateAdvancedIndicators(
             string symbol,
@@ -172,97 +355,76 @@ namespace PortfolioSignalWorker.Services
         {
             var enhanced = new EnhancedIndicator(current);
 
-            // Ottieni dati di prezzo per calcoli avanzati
             var prices = historical.Select(h => h.Price).Reverse().ToList();
             prices.Add(current.Price);
 
             var volumes = historical.Select(h => h.Volume).Reverse().ToList();
             volumes.Add(current.Volume);
 
-            // 1. TREND ANALYSIS - EMA multipli
             enhanced.EMA20 = CalculateEMA(prices, 20);
             enhanced.EMA50 = CalculateEMA(prices, 50);
-
-            // 2. TREND CLASSIFICATION
             enhanced.TrendDirection = ClassifyTrend(enhanced.EMA20, enhanced.EMA50, current.Price);
             enhanced.TrendStrength = CalculateTrendStrength(prices.TakeLast(20).ToList());
 
-            // 3. SUPPORT & RESISTANCE
             var (support, resistance) = CalculateKeyLevels(prices, current.Price);
             enhanced.SupportLevel = support;
             enhanced.ResistanceLevel = resistance;
             enhanced.DistanceFromSupport = support > 0 ? ((current.Price - support) / support) * 100 : 0;
             enhanced.DistanceFromResistance = resistance > 0 ? ((resistance - current.Price) / current.Price) * 100 : 0;
 
-            // 4. VOLUME ANALYSIS
             var avgVolume = volumes.Count >= 20 ? volumes.TakeLast(20).Average() : volumes.Average();
             enhanced.VolumeRatio = avgVolume > 0 ? current.Volume / avgVolume : 1;
             enhanced.IsVolumeBreakout = enhanced.VolumeRatio > 1.5;
 
-            // 5. RSI ENHANCEMENTS
             enhanced.RSI_Trend = CalculateRSITrend(historical);
             enhanced.RSI_Divergence = DetectRSIDivergence(historical, prices.TakeLast(historical.Count).ToList());
 
-            // 6. MACD ENHANCEMENTS  
             enhanced.MACD_Strength = CalculateMACDStrength(historical);
             enhanced.MACD_Trend = ClassifyMACDTrend(historical);
 
-            // 7. VOLATILITY
             enhanced.Volatility = CalculateVolatility(prices.TakeLast(14).ToList());
-
-            // 8. CONFLUENCE SCORE - VERSIONE QUALITÀ
             enhanced.ConfluenceScore = CalculateQualityConfluenceScore(enhanced);
 
             return enhanced;
         }
 
-        // 🔧 CONFLUENCE SCORE BILANCIATO per qualità
         private int CalculateQualityConfluenceScore(EnhancedIndicator enhanced)
         {
             int score = 0;
 
-            // 1. Trend (0-25 points) - PREMIANTE per trend rialzista
             score += enhanced.TrendDirection switch
             {
                 TrendDirection.Bullish => 25,
-                TrendDirection.Sideways => 10, // Neutrale non è male
-                TrendDirection.Bearish => 0,   // Penalizza trend negativo
+                TrendDirection.Sideways => 10,
+                TrendDirection.Bearish => 0,
                 _ => 5
             };
 
-            // 2. RSI positioning (0-20 points) - SELETTIVO
-            if (enhanced.RSI >= 20 && enhanced.RSI <= 40) score += 20; // Sweet spot ristretto
-            else if (enhanced.RSI >= 15 && enhanced.RSI <= 50) score += 15; // Buono
-            else if (enhanced.RSI >= 10 && enhanced.RSI <= 60) score += 10; // Accettabile
-            else score += 0; // Condizioni estreme = 0 punti
+            if (enhanced.RSI >= 20 && enhanced.RSI <= 40) score += 20;
+            else if (enhanced.RSI >= 15 && enhanced.RSI <= 50) score += 15;
+            else if (enhanced.RSI >= 10 && enhanced.RSI <= 60) score += 10;
 
-            // 3. MACD (0-20 points) - RICHIEDE CONFERMA
             if (enhanced.MACD_Histogram > 0 && enhanced.MACD_Trend == "BULLISH") score += 20;
             else if (enhanced.MACD_Histogram > 0) score += 15;
             else if (enhanced.MACD_Histogram_CrossUp) score += 10;
-            else if (enhanced.MACD_Histogram > -0.05) score += 5; // Quasi positivo
-            else score += 0; // MACD negativo = 0 punti
+            else if (enhanced.MACD_Histogram > -0.05) score += 5;
 
-            // 4. Volume (0-15 points) - RICHIEDE CONFERMA
             if (enhanced.IsVolumeBreakout && enhanced.VolumeRatio > 2.0) score += 15;
             else if (enhanced.VolumeRatio > 1.5) score += 12;
             else if (enhanced.VolumeRatio > 1.2) score += 8;
-            else if (enhanced.VolumeRatio > 1.0) score += 4; // Volume normale
-            else score += 0; // Volume basso = 0 punti
+            else if (enhanced.VolumeRatio > 1.0) score += 4;
 
-            // 5. Support/Resistance positioning (0-20 points) - POSIZIONAMENTO STRATEGICO
             if (enhanced.DistanceFromSupport <= 3 && enhanced.DistanceFromResistance > 10) score += 20;
             else if (enhanced.DistanceFromSupport <= 5 && enhanced.DistanceFromResistance > 8) score += 15;
             else if (enhanced.DistanceFromSupport <= 8 && enhanced.DistanceFromResistance > 5) score += 10;
             else if (enhanced.DistanceFromSupport <= 10) score += 5;
-            else score += 0; // Posizione sfavorevole = 0 punti
 
             return Math.Min(100, score);
         }
 
         #endregion
 
-        #region Technical Calculations (mantenuti identici dal tuo file originale)
+        #region Technical Calculations
 
         private double CalculateEMA(List<double> prices, int period)
         {
@@ -298,7 +460,7 @@ namespace PortfolioSignalWorker.Services
             var newPrice = recentPrices.Last();
 
             var change = Math.Abs((newPrice - oldPrice) / oldPrice) * 100;
-            return Math.Min(10, change); // Scale 0-10
+            return Math.Min(10, change);
         }
 
         private (double support, double resistance) CalculateKeyLevels(List<double> prices, double currentPrice)
@@ -306,20 +468,17 @@ namespace PortfolioSignalWorker.Services
             if (prices.Count < 20)
                 return (currentPrice * 0.95, currentPrice * 1.05);
 
-            // Simple but effective: trova minimi e massimi locali
             var recentLows = new List<double>();
             var recentHighs = new List<double>();
 
             for (int i = 2; i < prices.Count - 2; i++)
             {
-                // Swing low
                 if (prices[i] < prices[i - 1] && prices[i] < prices[i - 2] &&
                     prices[i] < prices[i + 1] && prices[i] < prices[i + 2])
                 {
                     recentLows.Add(prices[i]);
                 }
 
-                // Swing high
                 if (prices[i] > prices[i - 1] && prices[i] > prices[i - 2] &&
                     prices[i] > prices[i + 1] && prices[i] > prices[i + 2])
                 {
@@ -327,7 +486,6 @@ namespace PortfolioSignalWorker.Services
                 }
             }
 
-            // Trova supporto e resistenza più significativi
             var support = recentLows.Where(l => l < currentPrice * 0.98)
                                    .OrderByDescending(l => l)
                                    .FirstOrDefault();
@@ -356,7 +514,6 @@ namespace PortfolioSignalWorker.Services
         {
             if (historical.Count < 15 || prices.Count < 15) return false;
 
-            // Cerca divergenza bearish negli ultimi 15 periodi
             var midPoint = historical.Count / 2;
 
             var firstHalfPriceHigh = prices.Take(midPoint).Max();
@@ -365,7 +522,6 @@ namespace PortfolioSignalWorker.Services
             var firstHalfRSIHigh = historical.Take(midPoint).Max(h => h.RSI);
             var secondHalfRSIHigh = historical.Skip(midPoint).Max(h => h.RSI);
 
-            // Divergenza: prezzo fa massimi più alti, RSI fa massimi più bassi
             return secondHalfPriceHigh > firstHalfPriceHigh &&
                    secondHalfRSIHigh < firstHalfRSIHigh;
         }
@@ -377,7 +533,7 @@ namespace PortfolioSignalWorker.Services
             var recent = historical.TakeLast(5).ToList();
             var momentum = recent.Last().MACD_Histogram - recent.First().MACD_Histogram;
 
-            return Math.Min(10, Math.Max(1, 5 + momentum * 10)); // Scale 1-10
+            return Math.Min(10, Math.Max(1, 5 + momentum * 10));
         }
 
         private string ClassifyMACDTrend(List<StockIndicator> historical)
@@ -413,7 +569,7 @@ namespace PortfolioSignalWorker.Services
             var mean = returns.Average();
             var variance = returns.Sum(r => Math.Pow(r - mean, 2)) / returns.Count;
 
-            return Math.Sqrt(variance) * 100; // As percentage
+            return Math.Sqrt(variance) * 100;
         }
 
         #endregion
@@ -425,7 +581,6 @@ namespace PortfolioSignalWorker.Services
         {
             var reasons = new List<string> { baseReason };
 
-            // Aggiungi dettagli specifici per la qualità
             if (enhanced.TrendDirection == TrendDirection.Bullish)
                 reasons.Add("Strong bullish trend");
 
@@ -453,8 +608,6 @@ namespace PortfolioSignalWorker.Services
                 Price = enhanced.Price,
                 Volume = enhanced.Volume,
                 SignalHash = GenerateSignalHash(symbol, type.ToString(), enhanced.RSI),
-
-                // Enhanced fields
                 SupportLevel = enhanced.SupportLevel,
                 ResistanceLevel = enhanced.ResistanceLevel,
                 VolumeStrength = Math.Min(10, enhanced.VolumeRatio * 3),
@@ -463,15 +616,13 @@ namespace PortfolioSignalWorker.Services
             };
         }
 
-        // 🔧 NUOVO: Anti-spam per simbolo
         private async Task<bool> IsSymbolEligibleForSignal(string symbol)
         {
-            // Controlla se abbiamo già inviato un segnale recente per questo simbolo
             var recentSignalCount = await CountRecentSignalsForSymbol(symbol, TimeSpan.FromHours(24));
 
-            if (recentSignalCount >= 2) // Max 2 segnali per simbolo al giorno
+            if (recentSignalCount >= 2)
             {
-                _logger.LogDebug($"Symbol {symbol} already has {recentSignalCount} signals today - maintaining quality standards");
+                _logger.LogDebug($"Symbol {symbol} already has {recentSignalCount} signals today");
                 return false;
             }
 
@@ -490,16 +641,10 @@ namespace PortfolioSignalWorker.Services
             return (int)await _signalCollection.CountDocumentsAsync(filter);
         }
 
+        // 🟢 DEPRECATO - Usa GetHistoricalDataWithCacheAsync
         private async Task<List<StockIndicator>> GetHistoricalDataAsync(string symbol, int periods)
         {
-            var filter = Builders<StockIndicator>.Filter.Eq(x => x.Symbol, symbol);
-            var sort = Builders<StockIndicator>.Sort.Descending(x => x.CreatedAt);
-
-            return await _indicatorCollection
-                .Find(filter)
-                .Sort(sort)
-                .Limit(periods)
-                .ToListAsync();
+            return await GetHistoricalDataWithCacheAsync(symbol, periods);
         }
 
         private async Task<bool> HasRecentSignalAsync(string symbol, TimeSpan timeWindow)
@@ -533,13 +678,12 @@ namespace PortfolioSignalWorker.Services
         #endregion
     }
 
-    #region Enhanced Indicator Model (identico al tuo)
+    #region Enhanced Indicator Model
 
     public class EnhancedIndicator : StockIndicator
     {
         public EnhancedIndicator(StockIndicator baseIndicator)
         {
-            // Copia tutti i campi base
             Symbol = baseIndicator.Symbol;
             RSI = baseIndicator.RSI;
             MACD = baseIndicator.MACD;
@@ -559,7 +703,6 @@ namespace PortfolioSignalWorker.Services
             CreatedAt = baseIndicator.CreatedAt;
         }
 
-        // Enhanced fields
         public double EMA20 { get; set; }
         public double EMA50 { get; set; }
         public TrendDirection TrendDirection { get; set; }
