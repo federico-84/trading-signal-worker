@@ -194,7 +194,7 @@ public class SimplifiedEnhancedWorker : BackgroundService
             var signal = await _enhancedSignalFilter.AnalyzeEnhancedSignalAsync(watchlistSymbol.Symbol, indicator);
 
             // 3. Save indicator data
-            await _mongo.SaveIndicatorAsync(indicator);
+            await SaveIndicatorSmartAsync(indicator);
 
             if (signal != null)
             {
@@ -295,7 +295,32 @@ public class SimplifiedEnhancedWorker : BackgroundService
             return (false, null);
         }
     }
+    private async Task SaveIndicatorSmartAsync(StockIndicator indicator)
+    {
+        try
+        {
+            var today = indicator.CreatedAt.Date;
+            var indicatorCollection = _mongo.GetDatabase().GetCollection<StockIndicator>("Indicators");
 
+            var exists = await indicatorCollection
+                .Find(x => x.Symbol == indicator.Symbol && x.CreatedAt.Date == today)
+                .AnyAsync();
+
+            if (!exists)
+            {
+                await _mongo.SaveIndicatorAsync(indicator);
+                _logger.LogDebug($"💾 Saved NEW indicator: {indicator.Symbol} @ {today:yyyy-MM-dd}");
+            }
+            else
+            {
+                _logger.LogDebug($"ℹ️ Indicator already exists for {indicator.Symbol} today, skipping save");
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, $"Error saving indicator for {indicator.Symbol}");
+        }
+    }
     private void LogSignalValidationDetails(TradingSignal signal, AnalysisMode mode)
     {
         if (signal == null)

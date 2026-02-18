@@ -134,39 +134,38 @@ public class YahooFinanceService
     {
         try
         {
-            // Get historical data for calculations
+            // 🟢 UNA SOLA CHIAMATA (non più 2)
             var historicalData = await GetHistoricalDataAsync(symbol, 50);
-            var currentQuote = await GetQuoteAsync(symbol);
 
-            // Extract closing prices
-            var closePrices = historicalData["c"]?.ToObject<List<double>>() ?? new List<double>();
+            var closes = historicalData["c"]?.ToObject<List<double>>() ?? new List<double>();
+            var volumes = historicalData["v"]?.ToObject<List<long>>() ?? new List<long>();
+            var highs = historicalData["h"]?.ToObject<List<double>>() ?? new List<double>();
+            var lows = historicalData["l"]?.ToObject<List<double>>() ?? new List<double>();
+            var opens = historicalData["o"]?.ToObject<List<double>>() ?? new List<double>();
+            var timestamps = historicalData["t"]?.ToObject<List<long>>() ?? new List<long>();
 
-            if (closePrices.Count < 26)
+            if (closes.Count < 26)
             {
-                throw new InvalidOperationException($"Insufficient data for {symbol}. Got {closePrices.Count} days, need at least 26.");
+                throw new InvalidOperationException($"Insufficient data for {symbol}. Got {closes.Count} days, need at least 26.");
             }
 
-            // Calculate indicators
-            var rsi = CalculateRSI(closePrices);
-            var (macd, signal, histogram) = CalculateMACD(closePrices);
-
-            // Check for MACD crossover
-            var (prevMacd, prevSignal, prevHistogram) = CalculateMACD(closePrices.Take(closePrices.Count - 1).ToList());
+            var rsi = CalculateRSI(closes);
+            var (macd, signal, histogram) = CalculateMACD(closes);
+            var (prevMacd, prevSignal, prevHistogram) = CalculateMACD(closes.Take(closes.Count - 1).ToList());
             var crossUp = histogram > 0 && prevHistogram <= 0;
 
-            // Get current data from quote
-            var price = currentQuote["c"]?.Value<double>() ?? 0;
-            var volume = currentQuote["v"]?.Value<long>() ?? 0;
-            var previousClose = currentQuote["pc"]?.Value<double>() ?? 0;
-            var change = currentQuote["d"]?.Value<double>() ?? 0;
-            var changePercent = currentQuote["dp"]?.Value<double>() ?? 0;
-            var high = currentQuote["h"]?.Value<double>() ?? 0;
-            var low = currentQuote["l"]?.Value<double>() ?? 0;
-            var open = currentQuote["o"]?.Value<double>() ?? 0;
+            // USA ultimo elemento
+            var currentPrice = closes.Last();
+            var currentVolume = volumes.Last();
+            var previousClose = closes.Count > 1 ? closes[closes.Count - 2] : currentPrice;
+            var change = currentPrice - previousClose;
+            var changePercent = previousClose != 0 ? (change / previousClose) * 100 : 0;
+            var high = highs.Last();
+            var low = lows.Last();
+            var open = opens.Last();
 
-            // Calculate additional indicators
-            var pricePosition = CalculatePricePosition(price, high, low);
-            var volatility = CalculateSimpleVolatility(price, previousClose);
+            var pricePosition = CalculatePricePosition(currentPrice, high, low);
+            var volatility = CalculateSimpleVolatility(currentPrice, previousClose);
 
             return new StockIndicator
             {
@@ -176,10 +175,8 @@ public class YahooFinanceService
                 MACD_Signal = Math.Round(signal, 4),
                 MACD_Histogram = Math.Round(histogram, 4),
                 MACD_Histogram_CrossUp = crossUp,
-                Price = price,
-                Volume = volume,
-
-                // Yahoo Finance specific data
+                Price = currentPrice,
+                Volume = currentVolume,
                 PreviousClose = previousClose,
                 Change = change,
                 ChangePercent = changePercent,
@@ -188,8 +185,7 @@ public class YahooFinanceService
                 Open = open,
                 PricePosition = pricePosition,
                 DailyVolatility = volatility,
-
-                CreatedAt = DateTime.UtcNow
+                CreatedAt = DateTimeOffset.FromUnixTimeSeconds(timestamps.Last()).UtcDateTime
             };
         }
         catch (Exception ex)

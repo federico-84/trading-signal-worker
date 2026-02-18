@@ -31,15 +31,17 @@ public class MongoService
 
     private void CreateIndexes()
     {
-        // Existing indexes per Indicators
+        // Index per Indicators
         var symbolIndex = Builders<StockIndicator>.IndexKeys
             .Ascending(x => x.Symbol)
             .Descending(x => x.CreatedAt);
         _indicatorCollection.Indexes.CreateOne(new CreateIndexModel<StockIndicator>(symbolIndex));
 
+        // 🟢 TTL 90 giorni per storico
         var ttlIndex = Builders<StockIndicator>.IndexKeys.Ascending(x => x.CreatedAt);
-        var ttlOptions = new CreateIndexOptions { ExpireAfter = TimeSpan.FromDays(30) };
-        _indicatorCollection.Indexes.CreateOne(new CreateIndexModel<StockIndicator>(ttlIndex, ttlOptions));
+        var ttlOptions = new CreateIndexOptions { ExpireAfter = TimeSpan.FromDays(90) };
+        _indicatorCollection.Indexes.CreateOne(new CreateIndexModel<StockIndicator>(ttlIndex, ttlOptions));        
+         
 
         // Existing indexes per TradingSignals
         var signalIndex = Builders<TradingSignal>.IndexKeys
