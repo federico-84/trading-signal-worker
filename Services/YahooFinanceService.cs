@@ -102,7 +102,7 @@ public class YahooFinanceService
             _logger.LogDebug($"[INDICATORS] 🔍 Starting GetIndicatorsAsync for {symbol}");
 
             // Get historical data for calculations
-            var historicalData = await GetHistoricalDataAsync(symbol, 50);
+            var historicalData = await GetHistoricalDataAsync(symbol, 100);
 
             // Extract closing prices
             var closes = historicalData["c"]?.ToObject<List<double>>() ?? new List<double>();

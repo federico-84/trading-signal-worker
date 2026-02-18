@@ -39,7 +39,7 @@ namespace PortfolioSignalWorker.Services
                 }
 
                 // 🟢 1. Ottieni dati storici CON CACHE
-                var historicalData = await GetHistoricalDataWithCacheAsync(symbol, 50);
+                var historicalData = await GetHistoricalDataWithCacheAsync(symbol, 100);
                 _logger.LogInformation($"🔍 {symbol}: Retrieved {historicalData.Count} historical records");
 
                 if (historicalData.Count < 20)
