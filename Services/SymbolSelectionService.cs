@@ -486,6 +486,24 @@ namespace PortfolioSignalWorker.Services
             await _watchlistCollection.UpdateOneAsync(filter, update);
         }
 
+        /// <summary>
+        /// Disattiva un simbolo dalla watchlist (es. delisted o ticker non valido).
+        /// Il simbolo rimane in MongoDB per storico ma non viene più analizzato.
+        /// </summary>
+        public async Task DeactivateSymbolAsync(string symbol, string reason)
+        {
+            var filter = Builders<WatchlistSymbol>.Filter.Eq(x => x.Symbol, symbol);
+            var update = Builders<WatchlistSymbol>.Update
+                .Set(x => x.IsActive, false)
+                .Set(x => x.LastAnalyzed, DateTime.UtcNow)
+                .Set(x => x.Notes, $"Auto-deactivated: {reason} ({DateTime.UtcNow:yyyy-MM-dd})");
+
+            var result = await _watchlistCollection.UpdateOneAsync(filter, update);
+
+            if (result.ModifiedCount > 0)
+                _logger.LogWarning($"[WATCHLIST] Symbol {symbol} deactivated: {reason}");
+        }
+
         public async Task<List<WatchlistSymbol>> GetWatchlistSummary()
         {
             return await _watchlistCollection

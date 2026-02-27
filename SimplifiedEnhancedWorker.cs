@@ -289,6 +289,12 @@ public class SimplifiedEnhancedWorker : BackgroundService
             await UpdateSymbolAnalysisTime(watchlistSymbol.Symbol, analysisMode, false);
             return (false, signal);
         }
+        catch (SymbolNotFoundException ex)
+        {
+            _logger.LogWarning($"⚠️ {ex.Symbol} not found on Yahoo Finance — deactivating from watchlist");
+            await _symbolSelection.DeactivateSymbolAsync(ex.Symbol, "404 Not Found on Yahoo Finance (possibly delisted)");
+            return (false, null);
+        }
         catch (Exception ex)
         {
             _logger.LogError(ex, "Error in enhanced processing for {symbol}", watchlistSymbol.Symbol);

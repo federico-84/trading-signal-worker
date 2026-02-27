@@ -84,6 +84,11 @@ public class YahooFinanceService
                 ["s"] = "ok"
             };
         }
+        catch (HttpRequestException ex) when (ex.StatusCode == System.Net.HttpStatusCode.NotFound)
+        {
+            _logger.LogWarning($"[YAHOO] ❌ {symbol} returned 404 — symbol may be delisted or invalid");
+            throw new SymbolNotFoundException(symbol);
+        }
         catch (HttpRequestException ex)
         {
             _logger.LogError($"[YAHOO] 🔴 {symbol} HTTP ERROR: {ex.Message}");
@@ -318,5 +323,20 @@ public class YahooFinanceService
     {
         if (previous == 0) return 0;
         return Math.Abs((current - previous) / previous) * 100;
+    }
+}
+
+/// <summary>
+/// Lanciata quando un simbolo restituisce 404 da Yahoo Finance
+/// (simbolo delisted, non esistente, o ticker errato).
+/// </summary>
+public class SymbolNotFoundException : Exception
+{
+    public string Symbol { get; }
+
+    public SymbolNotFoundException(string symbol)
+        : base($"Symbol '{symbol}' not found on Yahoo Finance (404) — may be delisted or invalid")
+    {
+        Symbol = symbol;
     }
 }
