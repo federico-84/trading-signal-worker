@@ -22,8 +22,11 @@ public class SimplifiedEnhancedWorker : BackgroundService
     private int _strongSignals = 0;
     private int _mediumSignals = 0;
     private int _warningSignals = 0;
-    private int _dataDrivenSignals = 0; // 🆕 NUOVO: Counter per segnali data-driven
+    private int _dataDrivenSignals = 0;
     private DateTime _lastOptimization = DateTime.MinValue;
+
+    // Symbols that returned 404 this session — skipped for the rest of the process lifetime
+    private readonly HashSet<string> _delistedSymbols = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
     public SimplifiedEnhancedWorker(
         YahooFinanceService yahooFinance,
@@ -73,6 +76,16 @@ public class SimplifiedEnhancedWorker : BackgroundService
                 // Get symbols due for analysis
                 var symbolsDue = await _symbolSelection.GetSymbolsDueForAnalysis();
 
+                // Skip symbols that returned 404 earlier in this session (delisted/invalid)
+                if (_delistedSymbols.Count > 0)
+                {
+                    var before = symbolsDue.Count;
+                    symbolsDue = symbolsDue.Where(s => !_delistedSymbols.Contains(s.Symbol)).ToList();
+                    var skipped = before - symbolsDue.Count;
+                    if (skipped > 0)
+                        _logger.LogInformation($"[404-SKIP] Skipping {skipped} delisted symbol(s): {string.Join(", ", _delistedSymbols)}");
+                }
+
                 // Filter symbols based on market hours and enhanced criteria
                 var symbolsToProcess = FilterSymbolsForEnhancedAnalysis(symbolsDue);
 
@@ -114,6 +127,13 @@ public class SimplifiedEnhancedWorker : BackgroundService
                         };
 
                         await Task.Delay(delay, stoppingToken);
+                    }
+                    catch (SymbolNotFoundException ex)
+                    {
+                        // 404 surfaced all the way to the main loop — deactivate immediately
+                        _logger.LogWarning($"[404] {ex.Symbol} not found — deactivating (main loop catch)");
+                        _delistedSymbols.Add(ex.Symbol);
+                        await _symbolSelection.DeactivateSymbolAsync(ex.Symbol, "404 Not Found on Yahoo Finance");
                     }
                     catch (Exception ex)
                     {
@@ -291,8 +311,9 @@ public class SimplifiedEnhancedWorker : BackgroundService
         }
         catch (SymbolNotFoundException ex)
         {
-            _logger.LogWarning($"⚠️ {ex.Symbol} not found on Yahoo Finance — deactivating from watchlist");
-            await _symbolSelection.DeactivateSymbolAsync(ex.Symbol, "404 Not Found on Yahoo Finance (possibly delisted)");
+            _logger.LogWarning($"[404] {ex.Symbol} not found — deactivating (ProcessSymbol catch)");
+            _delistedSymbols.Add(ex.Symbol);
+            await _symbolSelection.DeactivateSymbolAsync(ex.Symbol, "404 Not Found on Yahoo Finance");
             return (false, null);
         }
         catch (Exception ex)

@@ -492,16 +492,21 @@ namespace PortfolioSignalWorker.Services
         /// </summary>
         public async Task DeactivateSymbolAsync(string symbol, string reason)
         {
+            _logger.LogWarning($"[WATCHLIST] Deactivating {symbol}: {reason}");
+
             var filter = Builders<WatchlistSymbol>.Filter.Eq(x => x.Symbol, symbol);
             var update = Builders<WatchlistSymbol>.Update
                 .Set(x => x.IsActive, false)
                 .Set(x => x.LastAnalyzed, DateTime.UtcNow)
+                .Set(x => x.NextAnalysis, DateTime.UtcNow.AddYears(1)) // safety net: push far into future
                 .Set(x => x.Notes, $"Auto-deactivated: {reason} ({DateTime.UtcNow:yyyy-MM-dd})");
 
             var result = await _watchlistCollection.UpdateOneAsync(filter, update);
 
             if (result.ModifiedCount > 0)
-                _logger.LogWarning($"[WATCHLIST] Symbol {symbol} deactivated: {reason}");
+                _logger.LogWarning($"[WATCHLIST] ✅ {symbol} deactivated in DB");
+            else
+                _logger.LogWarning($"[WATCHLIST] ⚠️ {symbol} not found in WatchlistSymbols — only blacklisted for this session");
         }
 
         public async Task<List<WatchlistSymbol>> GetWatchlistSummary()
