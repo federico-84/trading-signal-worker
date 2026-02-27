@@ -319,6 +319,8 @@ public class SimplifiedEnhancedWorker : BackgroundService
         catch (Exception ex)
         {
             _logger.LogError(ex, "Error in enhanced processing for {symbol}", watchlistSymbol.Symbol);
+            // Schedule retry in 30 minutes so the symbol doesn't hammer the API every cycle on error
+            await _symbolSelection.UpdateSymbolNextAnalysis(watchlistSymbol.Symbol, DateTime.UtcNow.AddMinutes(30));
             return (false, null);
         }
     }

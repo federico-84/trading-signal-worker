@@ -71,6 +71,12 @@ public class YahooFinanceService
             var lows = indicators["low"]?.ToObject<List<double?>>()?.Where(x => x.HasValue).Select(x => x.Value).ToList() ?? new List<double>();
             var volumes = indicators["volume"]?.ToObject<List<long?>>()?.Where(x => x.HasValue).Select(x => x.Value).ToList() ?? new List<long>();
 
+            if (closes.Count == 0)
+            {
+                _logger.LogWarning($"[YAHOO] ❌ {symbol} returned 0 data points (HTTP 200 but empty arrays) — symbol may be unavailable or use a different ticker");
+                throw new SymbolNotFoundException(symbol);
+            }
+
             _logger.LogInformation($"[YAHOO] ✅ {symbol} SUCCESS! closes: {closes.Count}, volumes: {volumes.Count}");
 
             return new JObject
