@@ -72,6 +72,10 @@ namespace PortfolioSignalWorker.Services
 
                 return signal;
             }
+            catch (SymbolNotFoundException)
+            {
+                throw; // Let the worker handle deactivation
+            }
             catch (Exception ex)
             {
                 _logger.LogError(ex, "🚨 Error in quality analysis for {symbol}", symbol);
@@ -140,11 +144,15 @@ namespace PortfolioSignalWorker.Services
 
                 return indicators.Take(periods).ToList();
             }
+            catch (SymbolNotFoundException)
+            {
+                throw; // Propagate so the worker can deactivate the symbol — do NOT fall back to cache
+            }
             catch (Exception ex)
             {
                 _logger.LogError(ex, $"[CACHE] 🔴 Error getting historical data for {symbol}");
 
-                // Fallback: usa cache anche se vecchia
+                // Fallback: usa cache anche se vecchia (solo per errori di rete, non per simboli non trovati)
                 var fallbackData = await _indicatorCollection
                     .Find(x => x.Symbol == symbol)
                     .SortByDescending(x => x.CreatedAt)

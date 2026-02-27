@@ -168,6 +168,10 @@ public class YahooFinanceService
                 CreatedAt = DateTimeOffset.FromUnixTimeSeconds(timestamps.Last()).UtcDateTime
             };
         }
+        catch (SymbolNotFoundException)
+        {
+            throw; // Propagate unchanged so the worker can deactivate the symbol
+        }
         catch (Exception ex)
         {
             _logger.LogError(ex, $"[INDICATORS] 🔴 Error calculating indicators for {symbol}");
@@ -213,6 +217,10 @@ public class YahooFinanceService
                 ["o"] = opens.Last(),           // open
                 ["v"] = volumes.Last()          // volume
             };
+        }
+        catch (SymbolNotFoundException)
+        {
+            throw;
         }
         catch (Exception ex)
         {
