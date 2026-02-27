@@ -1,0 +1,7 @@
+  PortfolioSignalWorker -> C:\Users\Utente\Documents\Sviluppo\federico-84\trading-signal-worker\bin\Debug\net8.0\PortfolioSignalWorker.dll
+
+Compilazione completata.
+    Avvisi: 0
+    Errori: 0
+
+Tempo trascorso 00:00:00.88

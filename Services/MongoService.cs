@@ -32,77 +32,110 @@ public class MongoService
     private void CreateIndexes()
     {
         // === Indicators ===
-        // Compound (Symbol, CreatedAt): copre le query per storico di un simbolo
-        var indicatorSymbolIndex = Builders<StockIndicator>.IndexKeys
-            .Ascending(x => x.Symbol)
-            .Descending(x => x.CreatedAt);
-        _indicatorCollection.Indexes.CreateOne(new CreateIndexModel<StockIndicator>(
-            indicatorSymbolIndex,
-            new CreateIndexOptions { Name = "ix_indicators_symbol_createdat" }));
+        TryCreateIndex(() =>
+        {
+            var indicatorSymbolIndex = Builders<StockIndicator>.IndexKeys
+                .Ascending(x => x.Symbol)
+                .Descending(x => x.CreatedAt);
+            _indicatorCollection.Indexes.CreateOne(new CreateIndexModel<StockIndicator>(
+                indicatorSymbolIndex,
+                new CreateIndexOptions { Name = "ix_indicators_symbol_createdat" }));
+        }, "ix_indicators_symbol_createdat");
 
-        // TTL 90 giorni: rimozione automatica dati storici vecchi
-        var indicatorTtlIndex = Builders<StockIndicator>.IndexKeys.Ascending(x => x.CreatedAt);
-        _indicatorCollection.Indexes.CreateOne(new CreateIndexModel<StockIndicator>(
-            indicatorTtlIndex,
-            new CreateIndexOptions { ExpireAfter = TimeSpan.FromDays(90), Name = "ix_indicators_ttl" }));
+        TryCreateIndex(() =>
+        {
+            var indicatorTtlIndex = Builders<StockIndicator>.IndexKeys.Ascending(x => x.CreatedAt);
+            _indicatorCollection.Indexes.CreateOne(new CreateIndexModel<StockIndicator>(
+                indicatorTtlIndex,
+                new CreateIndexOptions { ExpireAfter = TimeSpan.FromDays(90), Name = "ix_indicators_ttl" }));
+        }, "ix_indicators_ttl");
 
         // === TradingSignals ===
-        // Compound (Symbol, Sent, CreatedAt): copre le query anti-spam che filtrano Symbol + Sent + CreatedAt
-        var signalAntiSpamIndex = Builders<TradingSignal>.IndexKeys
-            .Ascending(x => x.Symbol)
-            .Ascending(x => x.Sent)
-            .Descending(x => x.CreatedAt);
-        _signalCollection.Indexes.CreateOne(new CreateIndexModel<TradingSignal>(
-            signalAntiSpamIndex,
-            new CreateIndexOptions { Name = "ix_signals_symbol_sent_createdat" }));
+        TryCreateIndex(() =>
+        {
+            var signalAntiSpamIndex = Builders<TradingSignal>.IndexKeys
+                .Ascending(x => x.Symbol)
+                .Ascending(x => x.Sent)
+                .Descending(x => x.CreatedAt);
+            _signalCollection.Indexes.CreateOne(new CreateIndexModel<TradingSignal>(
+                signalAntiSpamIndex,
+                new CreateIndexOptions { Name = "ix_signals_symbol_sent_createdat" }));
+        }, "ix_signals_symbol_sent_createdat");
 
-        // TTL 365 giorni: i segnali non crescono senza limite
-        var signalTtlIndex = Builders<TradingSignal>.IndexKeys.Ascending(x => x.CreatedAt);
-        _signalCollection.Indexes.CreateOne(new CreateIndexModel<TradingSignal>(
-            signalTtlIndex,
-            new CreateIndexOptions { ExpireAfter = TimeSpan.FromDays(365), Name = "ix_signals_ttl" }));
+        TryCreateIndex(() =>
+        {
+            var signalTtlIndex = Builders<TradingSignal>.IndexKeys.Ascending(x => x.CreatedAt);
+            _signalCollection.Indexes.CreateOne(new CreateIndexModel<TradingSignal>(
+                signalTtlIndex,
+                new CreateIndexOptions { ExpireAfter = TimeSpan.FromDays(365), Name = "ix_signals_ttl" }));
+        }, "ix_signals_ttl");
 
         // === WatchlistSymbols ===
-        // Compound (IsActive, NextAnalysis): è la query eseguita ad ogni ciclo del worker
-        var watchlistDueIndex = Builders<WatchlistSymbol>.IndexKeys
-            .Ascending(x => x.IsActive)
-            .Ascending(x => x.NextAnalysis);
-        _watchlistCollection.Indexes.CreateOne(new CreateIndexModel<WatchlistSymbol>(
-            watchlistDueIndex,
-            new CreateIndexOptions { Name = "ix_watchlist_isactive_nextanalysis" }));
+        TryCreateIndex(() =>
+        {
+            var watchlistDueIndex = Builders<WatchlistSymbol>.IndexKeys
+                .Ascending(x => x.IsActive)
+                .Ascending(x => x.NextAnalysis);
+            _watchlistCollection.Indexes.CreateOne(new CreateIndexModel<WatchlistSymbol>(
+                watchlistDueIndex,
+                new CreateIndexOptions { Name = "ix_watchlist_isactive_nextanalysis" }));
+        }, "ix_watchlist_isactive_nextanalysis");
 
-        // Single field (Symbol): per lookup per simbolo e update NextAnalysis
-        var watchlistSymbolIndex = Builders<WatchlistSymbol>.IndexKeys.Ascending(x => x.Symbol);
-        _watchlistCollection.Indexes.CreateOne(new CreateIndexModel<WatchlistSymbol>(
-            watchlistSymbolIndex,
-            new CreateIndexOptions { Unique = true, Name = "ix_watchlist_symbol_unique" }));
+        TryCreateIndex(() =>
+        {
+            var watchlistSymbolIndex = Builders<WatchlistSymbol>.IndexKeys.Ascending(x => x.Symbol);
+            _watchlistCollection.Indexes.CreateOne(new CreateIndexModel<WatchlistSymbol>(
+                watchlistSymbolIndex,
+                new CreateIndexOptions { Unique = true, Name = "ix_watchlist_symbol_unique" }));
+        }, "ix_watchlist_symbol_unique");
 
-        // 🚀 NUOVO: Breakout signal indexes
+        // === BreakoutSignals ===
+        TryCreateIndex(() =>
+        {
+            var idx = Builders<BreakoutSignalDocument>.IndexKeys
+                .Ascending(x => x.Symbol).Descending(x => x.AnalyzedAt);
+            _breakoutSignalCollection.Indexes.CreateOne(new CreateIndexModel<BreakoutSignalDocument>(idx));
+        }, "breakout_symbol_analyzedat");
+
+        TryCreateIndex(() =>
+        {
+            var idx = Builders<BreakoutSignalDocument>.IndexKeys
+                .Descending(x => x.BreakoutScore).Descending(x => x.AnalyzedAt);
+            _breakoutSignalCollection.Indexes.CreateOne(new CreateIndexModel<BreakoutSignalDocument>(idx));
+        }, "breakout_score_analyzedat");
+
+        TryCreateIndex(() =>
+        {
+            var idx = Builders<BreakoutSignalDocument>.IndexKeys
+                .Ascending(x => x.BreakoutType).Descending(x => x.AnalyzedAt);
+            _breakoutSignalCollection.Indexes.CreateOne(new CreateIndexModel<BreakoutSignalDocument>(idx));
+        }, "breakout_type_analyzedat");
+
+        TryCreateIndex(() =>
+        {
+            var idx = Builders<BreakoutSignalDocument>.IndexKeys.Ascending(x => x.AnalyzedAt);
+            _breakoutSignalCollection.Indexes.CreateOne(new CreateIndexModel<BreakoutSignalDocument>(
+                idx, new CreateIndexOptions { ExpireAfter = TimeSpan.FromDays(60) }));
+        }, "breakout_ttl");
+    }
+
+    /// <summary>
+    /// Crea un indice ignorando l'errore "already exists with a different name" —
+    /// si verifica quando il DB ha già l'indice con il nome auto-generato di MongoDB.
+    /// </summary>
+    private static void TryCreateIndex(Action createAction, string indexName)
+    {
         try
         {
-            var breakoutSymbolIndex = Builders<BreakoutSignalDocument>.IndexKeys
-                .Ascending(x => x.Symbol)
-                .Descending(x => x.AnalyzedAt);
-            _breakoutSignalCollection.Indexes.CreateOne(new CreateIndexModel<BreakoutSignalDocument>(breakoutSymbolIndex));
-
-            var breakoutScoreIndex = Builders<BreakoutSignalDocument>.IndexKeys
-                .Descending(x => x.BreakoutScore)
-                .Descending(x => x.AnalyzedAt);
-            _breakoutSignalCollection.Indexes.CreateOne(new CreateIndexModel<BreakoutSignalDocument>(breakoutScoreIndex));
-
-            var breakoutTypeIndex = Builders<BreakoutSignalDocument>.IndexKeys
-                .Ascending(x => x.BreakoutType)
-                .Descending(x => x.AnalyzedAt);
-            _breakoutSignalCollection.Indexes.CreateOne(new CreateIndexModel<BreakoutSignalDocument>(breakoutTypeIndex));
-
-            // TTL per breakout signals (mantieni 60 giorni per analysis)
-            var breakoutTtlIndex = Builders<BreakoutSignalDocument>.IndexKeys.Ascending(x => x.AnalyzedAt);
-            var breakoutTtlOptions = new CreateIndexOptions { ExpireAfter = TimeSpan.FromDays(60) };
-            _breakoutSignalCollection.Indexes.CreateOne(new CreateIndexModel<BreakoutSignalDocument>(breakoutTtlIndex, breakoutTtlOptions));
+            createAction();
+        }
+        catch (MongoCommandException ex) when (ex.Message.Contains("already exists"))
+        {
+            Console.WriteLine($"[Indexes] '{indexName}' already exists with a different name — skipping (harmless).");
         }
         catch (Exception ex)
         {
-            Console.WriteLine($"Warning: Could not create breakout indexes: {ex.Message}");
+            Console.WriteLine($"[Indexes] Warning: could not create '{indexName}': {ex.Message}");
         }
     }
 
