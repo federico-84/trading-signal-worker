@@ -8,6 +8,7 @@ namespace PortfolioSignalWorker.Services
     {
         private readonly IMongoCollection<StockIndicator> _indicatorCollection;
         private readonly IMongoCollection<TradingSignal> _signalCollection;
+        private readonly IMongoCollection<TakeProfitPerformanceRecord> _performanceCollection;
         private readonly YahooFinanceService _yahooFinance;
         private readonly ILogger<DataDrivenTakeProfitService> _logger;
 
@@ -18,6 +19,7 @@ namespace PortfolioSignalWorker.Services
         {
             _indicatorCollection = database.GetCollection<StockIndicator>("Indicators");
             _signalCollection = database.GetCollection<TradingSignal>("TradingSignals");
+            _performanceCollection = database.GetCollection<TakeProfitPerformanceRecord>("TakeProfitPerformance");
             _yahooFinance = yahooFinance;
             _logger = logger;
         }
@@ -301,7 +303,7 @@ namespace PortfolioSignalWorker.Services
                 var volumeProfile = CalculateVolumeProfile(closes, volumes, currentPrice);
 
                 // Calcola livelli pivot
-                var pivotLevels = CalculatePivotLevels(highs.Take(20).ToList(), lows.Take(20).ToList(), closes.Take(20).ToList());
+                var pivotLevels = CalculatePivotLevels(highs.TakeLast(20).ToList(), lows.TakeLast(20).ToList(), closes.TakeLast(20).ToList());
 
                 // Trova il miglior target di resistenza
                 var primaryResistance = SelectPrimaryResistanceTarget(resistanceLevels, currentPrice);
@@ -540,52 +542,273 @@ namespace PortfolioSignalWorker.Services
             return Math.Sqrt(squaredDifferences.Average());
         }
 
-        // Placeholder methods - implementare secondo necessità
         private List<ResistanceLevel> FindResistanceLevels(List<double> highs, List<double> closes, double currentPrice)
         {
-            // Implementazione semplificata
-            return new List<ResistanceLevel>();
+            if (highs.Count < 10)
+                return new List<ResistanceLevel>();
+
+            const int window = 3;
+            var swingHighs = new List<(double price, int index)>();
+
+            for (int i = window; i < highs.Count - window; i++)
+            {
+                bool isSwingHigh = true;
+                for (int j = i - window; j <= i + window; j++)
+                {
+                    if (j != i && highs[j] >= highs[i]) { isSwingHigh = false; break; }
+                }
+                if (isSwingHigh && highs[i] > currentPrice * 1.005)
+                    swingHighs.Add((highs[i], i));
+            }
+
+            if (!swingHighs.Any())
+                return new List<ResistanceLevel>();
+
+            // Cluster nearby swing highs within 1.5% of each other
+            var clusters = new List<List<(double price, int index)>>();
+            foreach (var sh in swingHighs.OrderBy(x => x.price))
+            {
+                var match = clusters.FirstOrDefault(c =>
+                    Math.Abs(c.Average(x => x.price) - sh.price) / sh.price < 0.015);
+                if (match != null) match.Add(sh);
+                else clusters.Add(new List<(double price, int index)> { sh });
+            }
+
+            return clusters
+                .Select(cluster =>
+                {
+                    var avgPrice = cluster.Average(x => x.price);
+                    var maxIdx = cluster.Max(x => x.index);
+                    var touchCount = cluster.Count;
+                    var recency = (double)maxIdx / highs.Count;
+                    return new ResistanceLevel
+                    {
+                        Level = avgPrice,
+                        TouchCount = touchCount,
+                        Strength = Math.Round(Math.Min(1.0, touchCount * 0.2 + recency * 0.6), 2),
+                        LastTouch = DateTime.UtcNow.AddDays(-(highs.Count - maxIdx)),
+                        Type = "Swing High"
+                    };
+                })
+                .Where(r => r.Level > currentPrice * 1.005)
+                .OrderBy(r => r.Level)
+                .ToList();
         }
 
         private List<SupportLevel> FindSupportLevels(List<double> lows, List<double> closes, double currentPrice)
         {
-            return new List<SupportLevel>();
+            if (lows.Count < 10)
+                return new List<SupportLevel>();
+
+            const int window = 3;
+            var swingLows = new List<(double price, int index)>();
+
+            for (int i = window; i < lows.Count - window; i++)
+            {
+                bool isSwingLow = true;
+                for (int j = i - window; j <= i + window; j++)
+                {
+                    if (j != i && lows[j] <= lows[i]) { isSwingLow = false; break; }
+                }
+                if (isSwingLow && lows[i] < currentPrice * 0.995)
+                    swingLows.Add((lows[i], i));
+            }
+
+            if (!swingLows.Any())
+                return new List<SupportLevel>();
+
+            var clusters = new List<List<(double price, int index)>>();
+            foreach (var sl in swingLows.OrderByDescending(x => x.price))
+            {
+                var match = clusters.FirstOrDefault(c =>
+                    Math.Abs(c.Average(x => x.price) - sl.price) / sl.price < 0.015);
+                if (match != null) match.Add(sl);
+                else clusters.Add(new List<(double price, int index)> { sl });
+            }
+
+            return clusters
+                .Select(cluster =>
+                {
+                    var avgPrice = cluster.Average(x => x.price);
+                    var maxIdx = cluster.Max(x => x.index);
+                    var touchCount = cluster.Count;
+                    var recency = (double)maxIdx / lows.Count;
+                    return new SupportLevel
+                    {
+                        Level = avgPrice,
+                        TouchCount = touchCount,
+                        Strength = Math.Round(Math.Min(1.0, touchCount * 0.2 + recency * 0.6), 2),
+                        LastTouch = DateTime.UtcNow.AddDays(-(lows.Count - maxIdx)),
+                        Type = "Swing Low"
+                    };
+                })
+                .Where(s => s.Level < currentPrice * 0.995)
+                .OrderByDescending(s => s.Level)
+                .ToList();
         }
 
         private (double resistance, double support) CalculateVolumeProfile(List<double> closes, List<long> volumes, double currentPrice)
         {
-            return (currentPrice * 1.05, currentPrice * 0.95);
+            if (closes.Count == 0 || volumes.Count == 0)
+                return (currentPrice * 1.05, currentPrice * 0.95);
+
+            const int buckets = 20;
+            double minPrice = closes.Min();
+            double maxPrice = closes.Max();
+            double bucketSize = (maxPrice - minPrice) / buckets;
+
+            if (bucketSize <= 0)
+                return (currentPrice * 1.05, currentPrice * 0.95);
+
+            var volumeByBucket = new double[buckets];
+            var priceByBucket = new double[buckets];
+            for (int i = 0; i < buckets; i++)
+                priceByBucket[i] = minPrice + (i + 0.5) * bucketSize;
+
+            int count = Math.Min(closes.Count, volumes.Count);
+            for (int i = 0; i < count; i++)
+            {
+                int b = Math.Clamp((int)((closes[i] - minPrice) / bucketSize), 0, buckets - 1);
+                volumeByBucket[b] += volumes[i];
+            }
+
+            double resistance = currentPrice * 1.05;
+            double support = currentPrice * 0.95;
+            double maxAboveVol = 0, maxBelowVol = 0;
+
+            for (int i = 0; i < buckets; i++)
+            {
+                double price = priceByBucket[i];
+                if (price > currentPrice && volumeByBucket[i] > maxAboveVol)
+                {
+                    maxAboveVol = volumeByBucket[i];
+                    resistance = price;
+                }
+                if (price < currentPrice && volumeByBucket[i] > maxBelowVol)
+                {
+                    maxBelowVol = volumeByBucket[i];
+                    support = price;
+                }
+            }
+
+            return (resistance, support);
         }
 
         private (double resistance, double support) CalculatePivotLevels(List<double> highs, List<double> lows, List<double> closes)
         {
-            return (highs.Max() * 0.98, lows.Min() * 1.02);
+            if (highs.Count == 0 || lows.Count == 0 || closes.Count == 0)
+                return (0, 0);
+
+            double H = highs.Max();
+            double L = lows.Min();
+            double C = closes.Last();
+            double P = (H + L + C) / 3;   // Pivot
+            double R1 = 2 * P - L;        // Resistance 1
+            double S1 = 2 * P - H;        // Support 1
+
+            return (R1, S1);
         }
 
         private ResistanceLevel SelectPrimaryResistanceTarget(List<ResistanceLevel> levels, double currentPrice)
         {
-            return levels.FirstOrDefault();
+            // Prefer levels closest to current price with reasonable strength
+            return levels
+                .Where(l => l.Level > currentPrice * 1.02 && l.Level < currentPrice * 1.20)
+                .OrderBy(l => l.Level)
+                .FirstOrDefault();
         }
 
         private ResistanceLevel SelectSecondaryResistanceTarget(List<ResistanceLevel> levels, ResistanceLevel primary, double currentPrice)
         {
-            return levels.Skip(1).FirstOrDefault();
+            return levels
+                .Where(l => primary == null || l.Level > primary.Level * 1.01)
+                .OrderBy(l => l.Level)
+                .FirstOrDefault();
         }
 
         private double CalculateResistanceStrength(List<ResistanceLevel> levels, double currentPrice)
         {
-            return 0.7;
+            if (!levels.Any()) return 0.3;
+
+            var relevant = levels
+                .Where(l => l.Level > currentPrice && l.Level < currentPrice * 1.25)
+                .ToList();
+
+            if (!relevant.Any()) return 0.3;
+
+            var avgStrength = relevant.Average(l => l.Strength);
+            var avgTouches = relevant.Average(l => l.TouchCount);
+            var levelCount = Math.Min(relevant.Count, 5);
+
+            return Math.Min(1.0, avgStrength * 0.6 + (avgTouches / 5.0) * 0.2 + (levelCount / 5.0) * 0.2);
         }
 
         private async Task<SignalPerformanceAnalysis> AnalyzeSignalPerformance(string symbol, SignalType signalType, double confidence)
         {
-            // Implementazione semplificata - placeholder
-            return new SignalPerformanceAnalysis
+            try
             {
-                IsDataSufficient = false,
-                AverageSuccessfulReturn = 12.0,
-                SuccessRate = 65.0
-            };
+                var cutoff = DateTime.UtcNow.AddDays(-90);
+
+                // First try symbol-specific records
+                var symbolFilter = Builders<TakeProfitPerformanceRecord>.Filter.And(
+                    Builders<TakeProfitPerformanceRecord>.Filter.Eq(x => x.Symbol, symbol),
+                    Builders<TakeProfitPerformanceRecord>.Filter.Eq(x => x.IsCompleted, true),
+                    Builders<TakeProfitPerformanceRecord>.Filter.Gte(x => x.CreatedAt, cutoff),
+                    Builders<TakeProfitPerformanceRecord>.Filter.Ne(x => x.ActualReturn, null)
+                );
+                var records = await _performanceCollection.Find(symbolFilter).ToListAsync();
+
+                // Fall back to all symbols with same signal type if not enough data
+                if (records.Count < 5)
+                {
+                    var globalFilter = Builders<TakeProfitPerformanceRecord>.Filter.And(
+                        Builders<TakeProfitPerformanceRecord>.Filter.Eq(x => x.IsCompleted, true),
+                        Builders<TakeProfitPerformanceRecord>.Filter.Eq(x => x.OriginalSignalType, signalType),
+                        Builders<TakeProfitPerformanceRecord>.Filter.Gte(x => x.CreatedAt, cutoff),
+                        Builders<TakeProfitPerformanceRecord>.Filter.Ne(x => x.ActualReturn, null)
+                    );
+                    records = await _performanceCollection.Find(globalFilter).ToListAsync();
+                }
+
+                if (records.Count < 3)
+                    return new SignalPerformanceAnalysis { IsDataSufficient = false };
+
+                var successfulRecords = records.Where(r =>
+                    r.ActualResult == TradingSignal.SimplifiedTakeProfitResult.Hit ||
+                    r.ActualResult == TradingSignal.SimplifiedTakeProfitResult.PartialHit).ToList();
+
+                var returns = records.Where(r => r.ActualReturn.HasValue).Select(r => r.ActualReturn!.Value).ToList();
+                var successReturns = successfulRecords.Where(r => r.ActualReturn.HasValue).Select(r => r.ActualReturn!.Value).ToList();
+                var failedReturns = records
+                    .Where(r => r.ActualResult == TradingSignal.SimplifiedTakeProfitResult.StoppedOut && r.ActualReturn.HasValue)
+                    .Select(r => r.ActualReturn!.Value).ToList();
+                var holdingPeriods = records
+                    .Where(r => r.HoldingPeriodDays.HasValue)
+                    .Select(r => (double)r.HoldingPeriodDays!.Value).ToList();
+                var sortedHolding = holdingPeriods.OrderBy(x => x).ToList();
+
+                return new SignalPerformanceAnalysis
+                {
+                    IsDataSufficient = true,
+                    Symbol = symbol,
+                    SignalType = signalType,
+                    TotalSignals = records.Count,
+                    SuccessfulSignals = successfulRecords.Count,
+                    SuccessRate = (double)successfulRecords.Count / records.Count * 100,
+                    AverageReturn = returns.Any() ? returns.Average() : 0,
+                    AverageSuccessfulReturn = successReturns.Any() ? successReturns.Average() : 0,
+                    AverageFailedReturn = failedReturns.Any() ? failedReturns.Average() : 0,
+                    BestReturn = returns.Any() ? returns.Max() : 0,
+                    WorstReturn = returns.Any() ? returns.Min() : 0,
+                    AverageHoldingPeriod = holdingPeriods.Any() ? holdingPeriods.Average() : 0,
+                    MedianHoldingPeriod = sortedHolding.Any() ? sortedHolding[sortedHolding.Count / 2] : 0
+                };
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error analyzing signal performance for {symbol}", symbol);
+                return new SignalPerformanceAnalysis { IsDataSufficient = false };
+            }
         }
 
         private DataDrivenTakeProfitResult CreateFallbackTakeProfit(string symbol, double currentPrice, double stopLoss, double confidence)

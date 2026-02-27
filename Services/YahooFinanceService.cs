@@ -12,6 +12,7 @@ public class YahooFinanceService
     {
         _logger = logger;
         _http = new HttpClient();
+        _http.Timeout = TimeSpan.FromSeconds(30);
         _http.DefaultRequestHeaders.Add("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36");
     }
 
@@ -177,8 +178,8 @@ public class YahooFinanceService
         {
             _logger.LogDebug($"[QUOTE] 📡 Getting quote for {symbol}");
 
-            // Usa GetHistoricalDataAsync per ottenere l'ultimo dato
-            var historicalData = await GetHistoricalDataAsync(symbol, 1);
+            // Usa GetHistoricalDataAsync con almeno 5 giorni per avere previousClose valido
+            var historicalData = await GetHistoricalDataAsync(symbol, 5);
 
             var closes = historicalData["c"]?.ToObject<List<double>>() ?? new List<double>();
             var volumes = historicalData["v"]?.ToObject<List<long>>() ?? new List<long>();
@@ -220,47 +221,73 @@ public class YahooFinanceService
     {
         if (prices.Count < period + 1) return 50;
 
-        var gains = new List<double>();
-        var losses = new List<double>();
-
-        for (int i = 1; i < prices.Count; i++)
+        // Build per-bar gain/loss arrays
+        var gains = new double[prices.Count - 1];
+        var losses = new double[prices.Count - 1];
+        for (int i = 0; i < prices.Count - 1; i++)
         {
-            var change = prices[i] - prices[i - 1];
-            gains.Add(change > 0 ? change : 0);
-            losses.Add(change < 0 ? Math.Abs(change) : 0);
+            var change = prices[i + 1] - prices[i];
+            gains[i] = change > 0 ? change : 0;
+            losses[i] = change < 0 ? -change : 0;
         }
 
-        var avgGain = gains.TakeLast(period).Average();
-        var avgLoss = losses.TakeLast(period).Average();
+        // Seed with simple average of first 'period' values (Wilder's method)
+        double avgGain = gains.Take(period).Average();
+        double avgLoss = losses.Take(period).Average();
+
+        // Wilder's smoothing: avgGain = (prevAvgGain * (period-1) + currentGain) / period
+        for (int i = period; i < gains.Length; i++)
+        {
+            avgGain = (avgGain * (period - 1) + gains[i]) / period;
+            avgLoss = (avgLoss * (period - 1) + losses[i]) / period;
+        }
 
         if (avgLoss == 0) return 100;
 
         var rs = avgGain / avgLoss;
-        var rsi = 100 - (100 / (1 + rs));
-
-        return rsi;
+        return 100 - (100 / (1 + rs));
     }
 
     public (double macd, double signal, double histogram) CalculateMACD(List<double> prices)
     {
         if (prices.Count < 26) return (0, 0, 0);
 
-        var ema12 = CalculateEMA(prices, 12);
-        var ema26 = CalculateEMA(prices, 26);
-        var macd = ema12 - ema26;
+        const double k12 = 2.0 / 13; // multiplier EMA12
+        const double k26 = 2.0 / 27; // multiplier EMA26
+        const double k9  = 2.0 / 10; // multiplier EMA9 (signal line)
 
-        var macdLine = new List<double>();
-        for (int i = 25; i < prices.Count; i++)
+        // Seed EMA12 con media semplice dei primi 12 prezzi
+        double ema12 = prices.Take(12).Average();
+        // Aggiorna EMA12 per i prezzi 12..25 (per sincronizzarsi con EMA26 al periodo 25)
+        for (int i = 12; i <= 25; i++)
+            ema12 = ema12 + k12 * (prices[i] - ema12);
+
+        // Seed EMA26 con media semplice dei primi 26 prezzi
+        double ema26 = prices.Take(26).Average();
+
+        // Primo valore MACD al periodo 25 (entrambe le EMA sono "al" prezzo[25])
+        var macdLine = new List<double>(prices.Count - 25);
+        macdLine.Add(ema12 - ema26);
+
+        // Costruisci il resto della MACD line in O(n) con aggiornamenti incrementali
+        for (int i = 26; i < prices.Count; i++)
         {
-            var e12 = CalculateEMA(prices.Take(i + 1).ToList(), 12);
-            var e26 = CalculateEMA(prices.Take(i + 1).ToList(), 26);
-            macdLine.Add(e12 - e26);
+            ema12 = ema12 + k12 * (prices[i] - ema12);
+            ema26 = ema26 + k26 * (prices[i] - ema26);
+            macdLine.Add(ema12 - ema26);
         }
 
-        var signal = CalculateEMA(macdLine, 9);
-        var histogram = macd - signal;
+        double currentMacd = macdLine[^1];
 
-        return (macd, signal, histogram);
+        if (macdLine.Count < 9)
+            return (currentMacd, currentMacd, 0);
+
+        // Signal line: EMA9 della MACD line, anch'essa incrementale
+        double signalEma = macdLine.Take(9).Average();
+        for (int i = 9; i < macdLine.Count; i++)
+            signalEma = signalEma + k9 * (macdLine[i] - signalEma);
+
+        return (currentMacd, signalEma, currentMacd - signalEma);
     }
 
     private double CalculateEMA(List<double> prices, int period)

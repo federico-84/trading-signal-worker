@@ -314,8 +314,8 @@ namespace PortfolioSignalWorker.Services
                     trueRanges.Add(Math.Max(tr1, Math.Max(tr2, tr3)));
                 }
 
-                var atr = trueRanges.Take(14).Average();
-                var currentPrice = closes.First();
+                var atr = trueRanges.TakeLast(14).Average();
+                var currentPrice = closes.Last(); // closes è in ordine cronologico (oldest first), Last() = prezzo corrente
                 var normalizedATR = (atr / currentPrice) * 100;
 
                 var volatilityClass = normalizedATR switch

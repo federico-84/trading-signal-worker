@@ -14,6 +14,10 @@ namespace PortfolioSignalWorker.Services
         private readonly YahooFinanceService _yahooFinance;
         private readonly ILogger<SimplifiedEnhancedSignalFilterService> _logger;
 
+        // Macro market filter cache (SPY trend, refreshed every 4h)
+        private (bool IsBullish, DateTime CachedAt) _macroCache = (true, DateTime.MinValue);
+        private readonly SemaphoreSlim _macroLock = new SemaphoreSlim(1, 1);
+
         public SimplifiedEnhancedSignalFilterService(
             IMongoDatabase database,
             YahooFinanceService yahooFinance,
@@ -284,9 +288,17 @@ namespace PortfolioSignalWorker.Services
             var isStrongBuy = IsStrongBuySetup(enhanced);
             _logger.LogInformation($"   🚀 Strong Buy (75+): {(isStrongBuy ? "✅ YES" : "❌ NO")}");
 
+            // 🌍 MACRO MARKET FILTER: block BUY signals when SPY is in a broad downtrend
+            bool isMacroBullish = await IsMacroMarketBullishAsync();
+            if (!isMacroBullish)
+                _logger.LogInformation($"   🌍 Macro filter: SPY bearish — BUY signals suppressed for {symbol}");
+
             // 🚀 STRONG BUY
             if (IsStrongBuySetup(enhanced))
             {
+                if (!isMacroBullish)
+                    return null; // Macro downtrend: skip buy to avoid catching a falling knife
+
                 return CreateEnhancedSignal(symbol, enhanced, SignalType.Buy,
                     Math.Min(95, enhanced.ConfluenceScore + 5),
                     "STRONG BUY: Excellent confluence with confirmed breakout");
@@ -295,12 +307,15 @@ namespace PortfolioSignalWorker.Services
             // 📈 MEDIUM BUY
             if (IsMediumBuySetup(enhanced))
             {
+                if (!isMacroBullish)
+                    return null;
+
                 return CreateEnhancedSignal(symbol, enhanced, SignalType.Buy,
                     Math.Min(85, enhanced.ConfluenceScore),
                     "MEDIUM BUY: Good technical setup with volume confirmation");
             }
 
-            // ⚠️ WARNING
+            // ⚠️ WARNING (allowed even in bearish macro — it's informational/protective)
             if (IsWarningSetup(enhanced))
             {
                 return CreateEnhancedSignal(symbol, enhanced, SignalType.Warning,
@@ -315,10 +330,13 @@ namespace PortfolioSignalWorker.Services
 
         private bool IsStrongBuySetup(EnhancedIndicator enhanced)
         {
+            // RSI 30-55: pullback realistico in un trend rialzista (era 20-40, ma con trend Bullish
+            // l'RSI raramente scende sotto 30-35, e MACD > 0 con RSI < 30 è quasi impossibile).
+            // Si accetta anche MACD_Histogram_CrossUp (appena incrociato positivo dal basso).
             return enhanced.ConfluenceScore >= 75 &&
                    enhanced.TrendDirection == TrendDirection.Bullish &&
-                   enhanced.RSI >= 20 && enhanced.RSI <= 40 &&
-                   enhanced.MACD_Histogram > 0 &&
+                   enhanced.RSI >= 30 && enhanced.RSI <= 55 &&
+                   (enhanced.MACD_Histogram > 0 || enhanced.MACD_Histogram_CrossUp) &&
                    enhanced.VolumeRatio > 1.5 &&
                    enhanced.DistanceFromSupport <= 5 &&
                    enhanced.DistanceFromResistance > 8 &&
@@ -361,12 +379,20 @@ namespace PortfolioSignalWorker.Services
             var volumes = historical.Select(h => h.Volume).Reverse().ToList();
             volumes.Add(current.Volume);
 
+            // Usa DayHigh/DayLow per S/R: i livelli vanno identificati sui massimi/minimi di seduta,
+            // non sui prezzi di chiusura. Fallback a Price se il dato non è disponibile.
+            var highs = historical.Select(h => h.DayHigh > 0 ? h.DayHigh : h.Price).Reverse().ToList();
+            highs.Add(current.DayHigh > 0 ? current.DayHigh : current.Price);
+
+            var lows = historical.Select(h => h.DayLow > 0 ? h.DayLow : h.Price).Reverse().ToList();
+            lows.Add(current.DayLow > 0 ? current.DayLow : current.Price);
+
             enhanced.EMA20 = CalculateEMA(prices, 20);
             enhanced.EMA50 = CalculateEMA(prices, 50);
             enhanced.TrendDirection = ClassifyTrend(enhanced.EMA20, enhanced.EMA50, current.Price);
             enhanced.TrendStrength = CalculateTrendStrength(prices.TakeLast(20).ToList());
 
-            var (support, resistance) = CalculateKeyLevels(prices, current.Price);
+            var (support, resistance) = CalculateKeyLevels(highs, lows, current.Price);
             enhanced.SupportLevel = support;
             enhanced.ResistanceLevel = resistance;
             enhanced.DistanceFromSupport = support > 0 ? ((current.Price - support) / support) * 100 : 0;
@@ -424,6 +450,53 @@ namespace PortfolioSignalWorker.Services
 
         #endregion
 
+        #region Macro Market Filter
+
+        private async Task<bool> IsMacroMarketBullishAsync()
+        {
+            var now = DateTime.UtcNow;
+            if ((now - _macroCache.CachedAt).TotalHours < 4)
+                return _macroCache.IsBullish;
+
+            await _macroLock.WaitAsync();
+            try
+            {
+                // Re-check after acquiring lock (another thread may have refreshed)
+                if ((now - _macroCache.CachedAt).TotalHours < 4)
+                    return _macroCache.IsBullish;
+
+                var spyData = await _yahooFinance.GetHistoricalDataAsync("SPY", 60);
+                var closes = spyData["c"]?.ToObject<List<double>>() ?? new List<double>();
+
+                if (closes.Count < 50)
+                {
+                    _macroCache = (true, now); // optimistic default when data is insufficient
+                    return true;
+                }
+
+                double ema20 = CalculateEMA(closes, 20);
+                double ema50 = CalculateEMA(closes, 50);
+                bool isBullish = ema20 > ema50 && closes.Last() > ema20;
+
+                _macroCache = (isBullish, now);
+                _logger.LogInformation($"[MACRO] SPY trend: {(isBullish ? "BULLISH ✅" : "BEARISH ⚠️")} " +
+                    $"(EMA20={ema20:F2}, EMA50={ema50:F2}, Last={closes.Last():F2})");
+                return isBullish;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "[MACRO] Failed to check SPY trend, defaulting to bullish");
+                _macroCache = (true, now);
+                return true;
+            }
+            finally
+            {
+                _macroLock.Release();
+            }
+        }
+
+        #endregion
+
         #region Technical Calculations
 
         private double CalculateEMA(List<double> prices, int period)
@@ -463,36 +536,50 @@ namespace PortfolioSignalWorker.Services
             return Math.Min(10, change);
         }
 
-        private (double support, double resistance) CalculateKeyLevels(List<double> prices, double currentPrice)
+        // Usa i massimi di seduta (highs) per i livelli di resistenza e i minimi (lows) per i supporti.
+        // Lookback di 3 barre per identificare swing point significativi.
+        private (double support, double resistance) CalculateKeyLevels(
+            List<double> highs, List<double> lows, double currentPrice)
         {
-            if (prices.Count < 20)
+            if (highs.Count < 20 || lows.Count < 20)
                 return (currentPrice * 0.95, currentPrice * 1.05);
 
-            var recentLows = new List<double>();
-            var recentHighs = new List<double>();
+            const int lookback = 3;
+            var swingLows = new List<double>();
+            var swingHighs = new List<double>();
 
-            for (int i = 2; i < prices.Count - 2; i++)
+            var len = Math.Min(highs.Count, lows.Count);
+
+            for (int i = lookback; i < len - lookback; i++)
             {
-                if (prices[i] < prices[i - 1] && prices[i] < prices[i - 2] &&
-                    prices[i] < prices[i + 1] && prices[i] < prices[i + 2])
+                // Swing low: lows[i] è il minimo locale su finestra di lookback barre per lato
+                bool isSwingLow = true;
+                for (int j = i - lookback; j <= i + lookback; j++)
                 {
-                    recentLows.Add(prices[i]);
+                    if (j != i && lows[j] <= lows[i]) { isSwingLow = false; break; }
                 }
+                if (isSwingLow) swingLows.Add(lows[i]);
 
-                if (prices[i] > prices[i - 1] && prices[i] > prices[i - 2] &&
-                    prices[i] > prices[i + 1] && prices[i] > prices[i + 2])
+                // Swing high: highs[i] è il massimo locale su finestra di lookback barre per lato
+                bool isSwingHigh = true;
+                for (int j = i - lookback; j <= i + lookback; j++)
                 {
-                    recentHighs.Add(prices[i]);
+                    if (j != i && highs[j] >= highs[i]) { isSwingHigh = false; break; }
                 }
+                if (isSwingHigh) swingHighs.Add(highs[i]);
             }
 
-            var support = recentLows.Where(l => l < currentPrice * 0.98)
-                                   .OrderByDescending(l => l)
-                                   .FirstOrDefault();
+            // Supporto: swing low più vicino ma almeno 2% sotto il prezzo corrente
+            var support = swingLows
+                .Where(l => l < currentPrice * 0.98)
+                .OrderByDescending(l => l)
+                .FirstOrDefault();
 
-            var resistance = recentHighs.Where(h => h > currentPrice * 1.02)
-                                       .OrderBy(h => h)
-                                       .FirstOrDefault();
+            // Resistenza: swing high più vicino ma almeno 2% sopra il prezzo corrente
+            var resistance = swingHighs
+                .Where(h => h > currentPrice * 1.02)
+                .OrderBy(h => h)
+                .FirstOrDefault();
 
             return (support > 0 ? support : currentPrice * 0.95,
                     resistance > 0 ? resistance : currentPrice * 1.05);
@@ -502,28 +589,56 @@ namespace PortfolioSignalWorker.Services
         {
             if (historical.Count < 10) return "UNKNOWN";
 
-            var recent5 = historical.TakeLast(5).Average(h => h.RSI);
-            var previous5 = historical.Skip(historical.Count - 10).Take(5).Average(h => h.RSI);
+            // historical è sorted newest-first (SortByDescending), quindi Take(5) = 5 più recenti
+            var recent5 = historical.Take(5).Average(h => h.RSI);
+            var previous5 = historical.Skip(5).Take(5).Average(h => h.RSI);
 
             if (recent5 > previous5 + 3) return "RISING";
             if (recent5 < previous5 - 3) return "FALLING";
             return "STABLE";
         }
 
+        // Divergenza ribassista: il prezzo fa un massimo più alto rispetto allo swing precedente,
+        // ma l'RSI fa un massimo più basso — segnale che il momentum si sta esaurendo.
+        // Usa swing high reali (3 barre lookback) per entrambe le serie, anziché confrontare
+        // semplici massimi su metà dataset (troppo rumoroso e impreciso).
         private bool DetectRSIDivergence(List<StockIndicator> historical, List<double> prices)
         {
-            if (historical.Count < 15 || prices.Count < 15) return false;
+            if (historical.Count < 20 || prices.Count < 20) return false;
 
-            var midPoint = historical.Count / 2;
+            // Normalizza in ordine cronologico (oldest → newest).
+            // historical arriva newest-first da MongoDB; prices è già oldest-first.
+            var chronoPrices = prices; // oldest-first
+            var chronoRsi = historical.Select(h => h.RSI).Reverse().ToList(); // converti in oldest-first
 
-            var firstHalfPriceHigh = prices.Take(midPoint).Max();
-            var secondHalfPriceHigh = prices.Skip(midPoint).Max();
+            var len = Math.Min(chronoPrices.Count, chronoRsi.Count);
+            if (len < 20) return false;
 
-            var firstHalfRSIHigh = historical.Take(midPoint).Max(h => h.RSI);
-            var secondHalfRSIHigh = historical.Skip(midPoint).Max(h => h.RSI);
+            // Trova swing high nei prezzi (massimo locale con lookback 3 barre per lato)
+            const int lookback = 3;
+            var swingHighIndices = new List<int>();
 
-            return secondHalfPriceHigh > firstHalfPriceHigh &&
-                   secondHalfRSIHigh < firstHalfRSIHigh;
+            for (int i = lookback; i < len - lookback; i++)
+            {
+                bool isHigh = true;
+                for (int j = i - lookback; j <= i + lookback; j++)
+                {
+                    if (j != i && chronoPrices[j] >= chronoPrices[i]) { isHigh = false; break; }
+                }
+                if (isHigh) swingHighIndices.Add(i);
+            }
+
+            if (swingHighIndices.Count < 2) return false;
+
+            // Confronta i due swing high più recenti
+            var lastIdx = swingHighIndices[swingHighIndices.Count - 1];
+            var prevIdx = swingHighIndices[swingHighIndices.Count - 2];
+
+            var priceHigher = chronoPrices[lastIdx] > chronoPrices[prevIdx];
+            // Soglia minima di 3 punti RSI per evitare falsi positivi su oscillazioni di rumore
+            var rsiLower = chronoRsi[lastIdx] < chronoRsi[prevIdx] - 3.0;
+
+            return priceHigher && rsiLower;
         }
 
         private double CalculateMACDStrength(List<StockIndicator> historical)

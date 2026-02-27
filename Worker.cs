@@ -249,14 +249,14 @@ public class Worker : BackgroundService
 
                 _logger.LogInformation($"📈 Cycle completed: {processedCount} processed, {signalsSentCount} signals sent");
                 // 🆕 NUOVO: Aggiorna performance tracking ogni ora
-                if (DateTime.Now.Minute == 0) // All'inizio di ogni ora
+                if (DateTime.UtcNow.Minute == 0) // All'inizio di ogni ora (UTC)
                 {
                     try
                     {
                         await _riskManagement.UpdateDataDrivenPerformance();
 
-                        // Report settimanale (lunedì mattina)
-                        if (DateTime.Now.DayOfWeek == DayOfWeek.Monday && DateTime.Now.Hour == 9)
+                        // Report settimanale (lunedì mattina UTC)
+                        if (DateTime.UtcNow.DayOfWeek == DayOfWeek.Monday && DateTime.UtcNow.Hour == 9)
                         {
                             var insights = await _riskManagement.GetDataDrivenInsights();
                             if (insights.HasSufficientData)
@@ -276,8 +276,8 @@ public class Worker : BackgroundService
                         _logger.LogError(ex, "Error updating take profit performance");
                     }
                 }
-                // Daily optimization (at midnight)
-                if (DateTime.Now.Hour == 0 && DateTime.Now.Minute < 5)
+                // Daily optimization (at midnight UTC)
+                if (DateTime.UtcNow.Hour == 0 && DateTime.UtcNow.Minute < 5)
                 {
                     _logger.LogInformation("🔄 Starting daily watchlist optimization...");
                     await _symbolSelection.OptimizeWatchlist();

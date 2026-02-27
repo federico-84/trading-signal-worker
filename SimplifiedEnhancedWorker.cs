@@ -536,103 +536,9 @@ public class SimplifiedEnhancedWorker : BackgroundService
     }
      
 
-    // 🆕 NUOVO: Messaggio potenziato con info data-driven
     private string FormatDataDrivenEnhancedMessage(TradingSignal signal, AnalysisMode mode, WatchlistSymbol symbol)
     {
         return _telegram.FormatTradingSignalMessage(signal, mode, symbol);
-        var modeEmoji = mode switch
-        {
-            AnalysisMode.FullAnalysis => "🟢",
-            AnalysisMode.PreMarketWatch => "🟡",
-            AnalysisMode.OffHoursMonitor => "🟠",
-            _ => "⚪"
-        };
-
-        var signalEmoji = (signal.Type, signal.Confidence) switch
-        {
-            (SignalType.Buy, >= 90) => "🚀",
-            (SignalType.Buy, >= 80) => "📈",
-            (SignalType.Buy, _) => "📊",
-            (SignalType.Warning, _) => "⚠️",
-            (SignalType.Sell, _) => "📉",
-            _ => "ℹ️"
-        };
-
-        var marketFlag = (symbol.Market ?? "US") switch
-        {
-            "EU" => "🇪🇺",
-            "US" => "🇺🇸",
-            _ => "🌍"
-        };
-
-        var currency = GetCurrencySymbol(signal.Symbol, symbol.Market ?? "US");
-        var marketStatus = _smartMarketHours.GetModeDescription(mode, signal.Symbol);
-
-        // 🆕 NUOVO: Indicator data-driven
-        var dataDrivenIndicator = !string.IsNullOrEmpty(signal.TakeProfitStrategy) ? " 🧠" : "";
-        var title = $"{modeEmoji} {signalEmoji} {signal.Type.ToString().ToUpper()} {signal.Symbol} {marketFlag}{dataDrivenIndicator}";
-
-        var message = $@"{title}
-
-🎯 Confidence: {signal.Confidence}% | {signal.MarketCondition}";
-
-        // 🆕 NUOVO: Aggiungi info strategia se disponibile
-        if (!string.IsNullOrEmpty(signal.TakeProfitStrategy))
-        {
-            message += $@"
-🧠 TP Strategy: {signal.TakeProfitStrategy}";
-
-            if (signal.PredictedSuccessProbability.HasValue)
-            {
-                message += $" ({signal.PredictedSuccessProbability:F0}% success rate)";
-            }
-        }
-
-        message += $@"
-📊 RSI: {signal.RSI:F1} | MACD: {signal.MACD_Histogram:F3}
-💰 Entry: {currency}{signal.Price:F2}
-📈 Volume: {FormatVolume(signal.Volume)} ({signal.VolumeStrength:F1}/10)
-🎢 Trend: {signal.TrendStrength:F1}/10
-
-🛡️ SMART RISK MANAGEMENT:
-🔻 Stop Loss: {currency}{signal.StopLoss:F2} ({signal.StopLossPercent:F1}%)
-🎯 Take Profit: {currency}{signal.TakeProfit:F2} ({signal.TakeProfitPercent:F1}%)
-⚖️ Risk/Reward: 1:{signal.RiskRewardRatio:F1}";
-
-        // Add support/resistance if available
-        if (signal.SupportLevel.HasValue && signal.ResistanceLevel.HasValue &&
-            signal.SupportLevel > 0 && signal.ResistanceLevel > 0)
-        {
-            message += $@"
-
-📈 KEY LEVELS:
-🟢 Support: {currency}{signal.SupportLevel:F2}
-🔴 Resistance: {currency}{signal.ResistanceLevel:F2}";
-        }
-
-        // Add enhanced strategy info
-        if (!string.IsNullOrEmpty(signal.EntryStrategy))
-        {
-            message += $@"
-
-🎯 ENTRY: {signal.EntryStrategy}";
-        }
-
-        if (!string.IsNullOrEmpty(signal.ExitStrategy))
-        {
-            message += $@"
-
-🚪 EXIT: {signal.ExitStrategy}";
-        }
-
-        message += $@"
-
-🕐 STATUS: {marketStatus}
-💡 {signal.Reason}
-
-⏰ {DateTime.Now:HH:mm} {modeEmoji} Enhanced v2.0{dataDrivenIndicator}";
-
-        return message;
     }
 
     private async Task UpdateSymbolAnalysisTime(string symbol, AnalysisMode mode, bool signalGenerated)
@@ -728,14 +634,14 @@ public class SimplifiedEnhancedWorker : BackgroundService
     // 🆕 NUOVO: Manutenzione oraria per performance tracking
     private async Task CheckHourlyMaintenance()
     {
-        if (DateTime.Now.Minute == 0) // All'inizio di ogni ora
+        if (DateTime.UtcNow.Minute == 0) // All'inizio di ogni ora (UTC)
         {
             try
             {
                 await _enhancedRiskManagement.UpdateDataDrivenPerformance();
 
-                // Report settimanale (lunedì mattina)
-                if (DateTime.Now.DayOfWeek == DayOfWeek.Monday && DateTime.Now.Hour == 9)
+                // Report settimanale (lunedì mattina UTC)
+                if (DateTime.UtcNow.DayOfWeek == DayOfWeek.Monday && DateTime.UtcNow.Hour == 9)
                 {
                     var insights = await _enhancedRiskManagement.GetDataDrivenInsights();
                     if (insights.HasSufficientData)

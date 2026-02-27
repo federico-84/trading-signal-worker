@@ -31,23 +31,51 @@ public class MongoService
 
     private void CreateIndexes()
     {
-        // Index per Indicators
-        var symbolIndex = Builders<StockIndicator>.IndexKeys
+        // === Indicators ===
+        // Compound (Symbol, CreatedAt): copre le query per storico di un simbolo
+        var indicatorSymbolIndex = Builders<StockIndicator>.IndexKeys
             .Ascending(x => x.Symbol)
             .Descending(x => x.CreatedAt);
-        _indicatorCollection.Indexes.CreateOne(new CreateIndexModel<StockIndicator>(symbolIndex));
+        _indicatorCollection.Indexes.CreateOne(new CreateIndexModel<StockIndicator>(
+            indicatorSymbolIndex,
+            new CreateIndexOptions { Name = "ix_indicators_symbol_createdat" }));
 
-        // 🟢 TTL 90 giorni per storico
-        var ttlIndex = Builders<StockIndicator>.IndexKeys.Ascending(x => x.CreatedAt);
-        var ttlOptions = new CreateIndexOptions { ExpireAfter = TimeSpan.FromDays(90) };
-        _indicatorCollection.Indexes.CreateOne(new CreateIndexModel<StockIndicator>(ttlIndex, ttlOptions));        
-         
+        // TTL 90 giorni: rimozione automatica dati storici vecchi
+        var indicatorTtlIndex = Builders<StockIndicator>.IndexKeys.Ascending(x => x.CreatedAt);
+        _indicatorCollection.Indexes.CreateOne(new CreateIndexModel<StockIndicator>(
+            indicatorTtlIndex,
+            new CreateIndexOptions { ExpireAfter = TimeSpan.FromDays(90), Name = "ix_indicators_ttl" }));
 
-        // Existing indexes per TradingSignals
-        var signalIndex = Builders<TradingSignal>.IndexKeys
+        // === TradingSignals ===
+        // Compound (Symbol, Sent, CreatedAt): copre le query anti-spam che filtrano Symbol + Sent + CreatedAt
+        var signalAntiSpamIndex = Builders<TradingSignal>.IndexKeys
             .Ascending(x => x.Symbol)
+            .Ascending(x => x.Sent)
             .Descending(x => x.CreatedAt);
-        _signalCollection.Indexes.CreateOne(new CreateIndexModel<TradingSignal>(signalIndex));
+        _signalCollection.Indexes.CreateOne(new CreateIndexModel<TradingSignal>(
+            signalAntiSpamIndex,
+            new CreateIndexOptions { Name = "ix_signals_symbol_sent_createdat" }));
+
+        // TTL 365 giorni: i segnali non crescono senza limite
+        var signalTtlIndex = Builders<TradingSignal>.IndexKeys.Ascending(x => x.CreatedAt);
+        _signalCollection.Indexes.CreateOne(new CreateIndexModel<TradingSignal>(
+            signalTtlIndex,
+            new CreateIndexOptions { ExpireAfter = TimeSpan.FromDays(365), Name = "ix_signals_ttl" }));
+
+        // === WatchlistSymbols ===
+        // Compound (IsActive, NextAnalysis): è la query eseguita ad ogni ciclo del worker
+        var watchlistDueIndex = Builders<WatchlistSymbol>.IndexKeys
+            .Ascending(x => x.IsActive)
+            .Ascending(x => x.NextAnalysis);
+        _watchlistCollection.Indexes.CreateOne(new CreateIndexModel<WatchlistSymbol>(
+            watchlistDueIndex,
+            new CreateIndexOptions { Name = "ix_watchlist_isactive_nextanalysis" }));
+
+        // Single field (Symbol): per lookup per simbolo e update NextAnalysis
+        var watchlistSymbolIndex = Builders<WatchlistSymbol>.IndexKeys.Ascending(x => x.Symbol);
+        _watchlistCollection.Indexes.CreateOne(new CreateIndexModel<WatchlistSymbol>(
+            watchlistSymbolIndex,
+            new CreateIndexOptions { Unique = true, Name = "ix_watchlist_symbol_unique" }));
 
         // 🚀 NUOVO: Breakout signal indexes
         try

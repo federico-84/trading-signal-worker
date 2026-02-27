@@ -78,7 +78,6 @@ var builder = Host.CreateDefaultBuilder(args)
     .ConfigureLogging((context, logging) =>
     {
         logging.ClearProviders();
-        logging.AddConsole();
 
         // Enhanced console formatting
         logging.AddConsole(options =>
