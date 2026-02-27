@@ -95,6 +95,10 @@ public class YahooFinanceService
             _logger.LogWarning($"[YAHOO] ❌ {symbol} returned 404 — symbol may be delisted or invalid");
             throw new SymbolNotFoundException(symbol);
         }
+        catch (SymbolNotFoundException)
+        {
+            throw; // Propagate unchanged — do not wrap in generic Exception
+        }
         catch (HttpRequestException ex)
         {
             _logger.LogError($"[YAHOO] 🔴 {symbol} HTTP ERROR: {ex.Message}");
