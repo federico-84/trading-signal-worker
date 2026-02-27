@@ -577,13 +577,11 @@ public class SimplifiedEnhancedWorker : BackgroundService
         switch (mode)
         {
             case AnalysisMode.FullAnalysis:
-                // 🟢 Mercato aperto - usa frequenza normale
-                var frequency = _smartMarketHours.GetAnalysisFrequency(mode, SymbolTier.Tier2_Standard);
-                if (signalGenerated)
-                {
-                    frequency = TimeSpan.FromTicks((long)(frequency.Ticks * 1.5)); // Wait longer after signal
-                }
-                nextAnalysis = DateTime.UtcNow.Add(frequency);
+                // 🟢 Mercato aperto — analisi nelle 3 finestre giornaliere:
+                //   Window 1: apertura +15min  (gap notturno / direzione iniziale)
+                //   Window 2: metà seduta      (conferma intraday)
+                //   Window 3: chiusura -60min  (candela quasi completa, segnale più affidabile)
+                nextAnalysis = _smartMarketHours.GetNextAnalysisWindow(symbol);
                 break;
 
             case AnalysisMode.PreMarketWatch:

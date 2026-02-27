@@ -136,6 +136,77 @@ namespace PortfolioSignalWorker.Services
             return false;
         }
 
+        /// <summary>
+        /// Returns the UTC DateTime of the next of the 3 daily analysis windows for this symbol:
+        ///   Window 1 — market open +15 min   (opening gap / initial direction)
+        ///   Window 2 — session midpoint       (intraday confirmation)
+        ///   Window 3 — market close -60 min   (candle nearly complete, most reliable)
+        /// If all windows for today have passed, returns Window 1 of the next trading session.
+        /// </summary>
+        public DateTime GetNextAnalysisWindow(string symbol)
+        {
+            var utcNow = DateTime.UtcNow;
+            var (openUtc, closeUtc) = GetMarketSessionUtc(symbol, utcNow);
+
+            var window1 = openUtc.AddMinutes(15);
+            var window2 = openUtc + TimeSpan.FromTicks((closeUtc - openUtc).Ticks / 2);
+            var window3 = closeUtc.AddMinutes(-60);
+
+            if (utcNow < window1) return window1;
+            if (utcNow < window2) return window2;
+            if (utcNow < window3) return window3;
+
+            // All windows passed today — find next trading session's Window 1
+            var nextRef = utcNow.AddDays(1);
+            for (int i = 0; i < 5; i++)
+            {
+                var (nextOpen, _) = GetMarketSessionUtc(symbol, nextRef);
+                if (nextOpen.AddMinutes(15) > utcNow)
+                    return nextOpen.AddMinutes(15);
+                nextRef = nextRef.AddDays(1);
+            }
+
+            return utcNow.AddHours(24); // fallback
+        }
+
+        /// <summary>
+        /// Returns the UTC open and close of the trading session for the given symbol
+        /// on the trading day that contains (or follows) referenceUtc.
+        /// </summary>
+        private (DateTime openUtc, DateTime closeUtc) GetMarketSessionUtc(string symbol, DateTime referenceUtc)
+        {
+            string tzId;
+            TimeSpan openLocal, closeLocal;
+
+            if (GetMarketFromSymbol(symbol) == MarketRegion.US)
+            {
+                tzId = "Eastern Standard Time";
+                openLocal = new TimeSpan(9, 30, 0);
+                closeLocal = new TimeSpan(16, 0, 0);
+            }
+            else
+            {
+                tzId = GetEuropeanTimeZone(symbol);
+                (openLocal, closeLocal) = GetEuropeanMarketHours(symbol);
+            }
+
+            var tz = TimeZoneInfo.FindSystemTimeZoneById(tzId);
+            var localRef = TimeZoneInfo.ConvertTimeFromUtc(referenceUtc, tz);
+
+            // Advance to the nearest weekday (skips Sat/Sun)
+            var tradingDate = localRef.Date;
+            while (tradingDate.DayOfWeek == DayOfWeek.Saturday || tradingDate.DayOfWeek == DayOfWeek.Sunday)
+                tradingDate = tradingDate.AddDays(1);
+
+            var openLocalDt  = DateTime.SpecifyKind(tradingDate.Add(openLocal),  DateTimeKind.Unspecified);
+            var closeLocalDt = DateTime.SpecifyKind(tradingDate.Add(closeLocal), DateTimeKind.Unspecified);
+
+            return (
+                TimeZoneInfo.ConvertTimeToUtc(openLocalDt,  tz),
+                TimeZoneInfo.ConvertTimeToUtc(closeLocalDt, tz)
+            );
+        }
+
         public List<string> GetCurrentAnalysisModes()
         {
             var modes = new List<string>();

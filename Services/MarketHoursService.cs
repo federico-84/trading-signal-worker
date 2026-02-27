@@ -35,7 +35,7 @@ namespace PortfolioSignalWorker.Services
             };
         }
 
-        private MarketRegion GetMarketFromSymbol(string symbol)
+        protected MarketRegion GetMarketFromSymbol(string symbol)
         {
             if (symbol.Contains(".MI") || symbol.Contains(".AS") || symbol.Contains(".DE") ||
                 symbol.Contains(".PA") || symbol.Contains(".SW") || symbol.Contains(".L") ||
@@ -78,7 +78,7 @@ namespace PortfolioSignalWorker.Services
             return localTime.TimeOfDay >= marketOpen && localTime.TimeOfDay <= marketClose;
         }
 
-        private string GetEuropeanTimeZone(string symbol)
+        protected string GetEuropeanTimeZone(string symbol)
         {
             return symbol switch
             {
@@ -93,7 +93,7 @@ namespace PortfolioSignalWorker.Services
             };
         }
 
-        private (TimeSpan open, TimeSpan close) GetEuropeanMarketHours(string symbol)
+        protected (TimeSpan open, TimeSpan close) GetEuropeanMarketHours(string symbol)
         {
             return symbol switch
             {

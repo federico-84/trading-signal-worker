@@ -8,6 +8,9 @@ public class YahooFinanceService
     private readonly HttpClient _http;
     private readonly ILogger<YahooFinanceService> _logger;
 
+    // Short-lived in-memory cache: avoids double Yahoo calls within the same analysis cycle (~1s apart)
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, (JObject Data, DateTime FetchedAt)> _requestCache = new();
+
     public YahooFinanceService(ILogger<YahooFinanceService> logger)
     {
         _logger = logger;
@@ -20,6 +23,15 @@ public class YahooFinanceService
     {
         try
         {
+            // Return cached response if fetched within the last 5 minutes (avoids double calls per analysis cycle)
+            var cacheKey = $"{symbol}_{days}";
+            if (_requestCache.TryGetValue(cacheKey, out var cached) &&
+                (DateTime.UtcNow - cached.FetchedAt).TotalMinutes < 5)
+            {
+                _logger.LogDebug($"[YAHOO] 💾 {symbol} reusing cached response (< 5min old)");
+                return cached.Data;
+            }
+
             var endTime = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
             var startTime = DateTimeOffset.UtcNow.AddDays(-days).ToUnixTimeSeconds();
 
@@ -46,16 +58,16 @@ public class YahooFinanceService
                 throw new Exception($"Yahoo Finance error for {symbol}: {errorCode} - {description}");
             }
 
-            var result = data["chart"]?["result"]?[0];
+            var yahooResult = data["chart"]?["result"]?[0];
 
-            if (result == null)
+            if (yahooResult == null)
             {
                 _logger.LogWarning($"[YAHOO] ❌ {symbol} result is NULL!");
                 throw new Exception($"No result from Yahoo for {symbol}");
             }
 
-            var indicators = result["indicators"]?["quote"]?[0];
-            var timestamps = result["timestamp"]?.ToObject<List<long>>() ?? new List<long>();
+            var indicators = yahooResult["indicators"]?["quote"]?[0];
+            var timestamps = yahooResult["timestamp"]?.ToObject<List<long>>() ?? new List<long>();
 
             _logger.LogDebug($"[YAHOO] 📊 {symbol} timestamps: {timestamps.Count}");
 
@@ -79,7 +91,7 @@ public class YahooFinanceService
 
             _logger.LogInformation($"[YAHOO] ✅ {symbol} SUCCESS! closes: {closes.Count}, volumes: {volumes.Count}");
 
-            return new JObject
+            var result = new JObject
             {
                 ["c"] = JArray.FromObject(closes),
                 ["o"] = JArray.FromObject(opens),
@@ -89,6 +101,10 @@ public class YahooFinanceService
                 ["t"] = JArray.FromObject(timestamps),
                 ["s"] = "ok"
             };
+
+            // Store in request cache for 5 minutes
+            _requestCache[cacheKey] = (result, DateTime.UtcNow);
+            return result;
         }
         catch (HttpRequestException ex) when (ex.StatusCode == System.Net.HttpStatusCode.NotFound)
         {
