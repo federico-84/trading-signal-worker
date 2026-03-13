@@ -137,10 +137,11 @@ namespace PortfolioSignalWorker.Services
         }
 
         /// <summary>
-        /// Returns the UTC DateTime of the next of the 3 daily analysis windows for this symbol:
-        ///   Window 1 — market open +15 min   (opening gap / initial direction)
-        ///   Window 2 — session midpoint       (intraday confirmation)
-        ///   Window 3 — market close -60 min   (candle nearly complete, most reliable)
+        /// Returns the UTC DateTime of the next of the 3 daily analysis windows for this symbol.
+        /// Windows are designed for daily-candle analysis — timed when volume is meaningful:
+        ///   Window 1 — open +120 min  (morning: ~20-30% of daily volume accumulated)
+        ///   Window 2 — session midpoint (afternoon: candle well-formed, trend visible)
+        ///   Window 3 — close -15 min  (end of day: candle nearly complete, most reliable signal)
         /// If all windows for today have passed, returns Window 1 of the next trading session.
         /// </summary>
         public DateTime GetNextAnalysisWindow(string symbol)
@@ -148,9 +149,9 @@ namespace PortfolioSignalWorker.Services
             var utcNow = DateTime.UtcNow;
             var (openUtc, closeUtc) = GetMarketSessionUtc(symbol, utcNow);
 
-            var window1 = openUtc.AddMinutes(15);
-            var window2 = openUtc + TimeSpan.FromTicks((closeUtc - openUtc).Ticks / 2);
-            var window3 = closeUtc.AddMinutes(-60);
+            var window1 = openUtc.AddMinutes(120);  // +2h: volume has built up (~20-30% of daily)
+            var window2 = openUtc + TimeSpan.FromTicks((closeUtc - openUtc).Ticks / 2); // midpoint
+            var window3 = closeUtc.AddMinutes(-15); // -15min: candle nearly complete
 
             if (utcNow < window1) return window1;
             if (utcNow < window2) return window2;
@@ -161,8 +162,8 @@ namespace PortfolioSignalWorker.Services
             for (int i = 0; i < 5; i++)
             {
                 var (nextOpen, _) = GetMarketSessionUtc(symbol, nextRef);
-                if (nextOpen.AddMinutes(15) > utcNow)
-                    return nextOpen.AddMinutes(15);
+                if (nextOpen.AddMinutes(120) > utcNow)
+                    return nextOpen.AddMinutes(120);
                 nextRef = nextRef.AddDays(1);
             }
 
