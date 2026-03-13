@@ -356,18 +356,18 @@ namespace PortfolioSignalWorker.Services
             return enhanced.ConfluenceScore >= 60 &&
                    enhanced.TrendDirection != TrendDirection.Bearish &&
                    enhanced.RSI >= 20 && enhanced.RSI <= 45 &&
-                   (enhanced.MACD_Histogram > 0 || enhanced.MACD_Histogram_CrossUp) &&
-                   enhanced.VolumeRatio > 1.2;
+                   (enhanced.MACD_Histogram > 0 || enhanced.MACD_Histogram_CrossUp || enhanced.MACD_Trend == "BULLISH") &&
+                   enhanced.VolumeRatio > 1.0;
         }
 
         private bool IsWarningSetup(EnhancedIndicator enhanced)
         {
             return enhanced.ConfluenceScore >= 50 &&
-                   (enhanced.RSI <= 25 ||
+                   (enhanced.RSI <= 30 ||
                     (enhanced.TrendDirection == TrendDirection.Bearish &&
-                     enhanced.RSI <= 30 &&
+                     enhanced.RSI <= 35 &&
                      enhanced.VolumeRatio > 1.5)) &&
-                   enhanced.DistanceFromSupport <= 3;
+                   enhanced.DistanceFromSupport <= 5;
         }
 
         #endregion
@@ -406,8 +406,15 @@ namespace PortfolioSignalWorker.Services
             enhanced.DistanceFromSupport = support > 0 ? ((current.Price - support) / support) * 100 : 0;
             enhanced.DistanceFromResistance = resistance > 0 ? ((resistance - current.Price) / current.Price) * 100 : 0;
 
-            var avgVolume = volumes.Count >= 20 ? volumes.TakeLast(20).Average() : volumes.Average();
-            enhanced.VolumeRatio = avgVolume > 0 ? current.Volume / avgVolume : 1;
+            // Use last completed session's volume, not today's partial intraday volume.
+            // volumes is oldest-first; the last entry is today's in-progress candle which
+            // always appears low compared to full-day historical averages.
+            var completedVolumes = volumes.Count > 1 ? volumes.SkipLast(1).ToList() : volumes;
+            var avgVolume = completedVolumes.Count >= 20
+                ? completedVolumes.TakeLast(20).Average()
+                : completedVolumes.Average();
+            var referenceVolume = completedVolumes.Any() ? (double)completedVolumes.Last() : (double)current.Volume;
+            enhanced.VolumeRatio = avgVolume > 0 ? referenceVolume / avgVolume : 1;
             enhanced.IsVolumeBreakout = enhanced.VolumeRatio > 1.5;
 
             enhanced.RSI_Trend = CalculateRSITrend(historical);
@@ -441,6 +448,7 @@ namespace PortfolioSignalWorker.Services
             if (enhanced.MACD_Histogram > 0 && enhanced.MACD_Trend == "BULLISH") score += 20;
             else if (enhanced.MACD_Histogram > 0) score += 15;
             else if (enhanced.MACD_Histogram_CrossUp) score += 10;
+            else if (enhanced.MACD_Trend == "BULLISH") score += 8;  // histogram still negative but turning up — early reversal
             else if (enhanced.MACD_Histogram > -0.05) score += 5;
 
             if (enhanced.IsVolumeBreakout && enhanced.VolumeRatio > 2.0) score += 15;
