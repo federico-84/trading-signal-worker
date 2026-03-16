@@ -353,21 +353,21 @@ namespace PortfolioSignalWorker.Services
 
         private bool IsMediumBuySetup(EnhancedIndicator enhanced)
         {
-            return enhanced.ConfluenceScore >= 60 &&
+            return enhanced.ConfluenceScore >= 55 &&
                    enhanced.TrendDirection != TrendDirection.Bearish &&
                    enhanced.RSI >= 20 && enhanced.RSI <= 45 &&
                    (enhanced.MACD_Histogram > 0 || enhanced.MACD_Histogram_CrossUp || enhanced.MACD_Trend == "BULLISH") &&
-                   enhanced.VolumeRatio > 1.0;
+                   enhanced.VolumeRatio > 0.7;
         }
 
         private bool IsWarningSetup(EnhancedIndicator enhanced)
         {
-            return enhanced.ConfluenceScore >= 50 &&
+            return enhanced.ConfluenceScore >= 45 &&
                    (enhanced.RSI <= 30 ||
                     (enhanced.TrendDirection == TrendDirection.Bearish &&
                      enhanced.RSI <= 35 &&
                      enhanced.VolumeRatio > 1.5)) &&
-                   enhanced.DistanceFromSupport <= 5;
+                   enhanced.DistanceFromSupport <= 6;
         }
 
         #endregion
