@@ -51,9 +51,9 @@ namespace PortfolioSignalWorker.Services
                 // OffHoursMonitor => double.MaxValue (mai)
 
                 // 🔧 NUOVE SOGLIE RILASSATE:
-                AnalysisMode.FullAnalysis => 50.0,      // 🔧 RIDOTTO da 60 a 50
-                AnalysisMode.PreMarketWatch => 60.0,    // 🔧 RIDOTTO da 80 a 60
-                AnalysisMode.OffHoursMonitor => 70.0,   // 🔧 ABILITATO: era double.MaxValue (mai)
+                AnalysisMode.FullAnalysis => 50.0,
+                AnalysisMode.PreMarketWatch => 60.0,
+                AnalysisMode.OffHoursMonitor => 55.0,   // post-close Window 0: candela completa, segnali affidabili
                 AnalysisMode.Skip => double.MaxValue,   // Skip rimane disabilitato
                 _ => 50.0
             };
@@ -124,11 +124,12 @@ namespace PortfolioSignalWorker.Services
                 return result;
             }
 
-            // 🚫 OFF-HOURS: Mercato chiuso = NO SEGNALI
+            // 🟠 POST-CLOSE (Window 0): candela completa — segnali più affidabili del giorno
             if (mode == AnalysisMode.OffHoursMonitor)
             {
-                _logger.LogInformation($"🟠 OFF-HOURS: {signal.Symbol} - Market closed, skipping signal (professional strategy)");
-                return false; // 🎯 SEMPRE false per off-hours
+                var result = signal.Confidence >= threshold;
+                _logger.LogInformation($"🟠 POST-CLOSE: {signal.Symbol} {signal.Confidence}% >= {threshold}% = {(result ? "SEND ✅" : "SKIP")} (candela completa)");
+                return result;
             }
 
             // 🚫 SKIP: Troppo lontano dall'apertura
@@ -138,10 +139,12 @@ namespace PortfolioSignalWorker.Services
 
         /// <summary>
         /// Returns the UTC DateTime of the next of the 3 daily analysis windows for this symbol.
-        /// Windows are designed for daily-candle analysis — timed when volume is meaningful:
-        ///   Window 1 — open +120 min  (morning: ~20-30% of daily volume accumulated)
-        ///   Window 2 — session midpoint (afternoon: candle well-formed, trend visible)
-        ///   Window 3 — close -15 min  (end of day: candle nearly complete, most reliable signal)
+        /// Windows are designed for daily-candle swing trading:
+        ///   Window 1 — open +120 min   (morning: momentum confirmation, ~20-30% volume)
+        ///   Window 2 — session midpoint (afternoon: trend visible, candle well-formed)
+        ///   Window 0 — close +30 min   (post-close: candle COMPLETE and definitive — most reliable)
+        /// Window 0 fires after close so the candle data is final. Signals sent here are acted
+        /// on the following morning at open — the classic swing trading workflow.
         /// If all windows for today have passed, returns Window 1 of the next trading session.
         /// </summary>
         public DateTime GetNextAnalysisWindow(string symbol)
@@ -149,13 +152,13 @@ namespace PortfolioSignalWorker.Services
             var utcNow = DateTime.UtcNow;
             var (openUtc, closeUtc) = GetMarketSessionUtc(symbol, utcNow);
 
-            var window1 = openUtc.AddMinutes(120);  // +2h: volume has built up (~20-30% of daily)
+            var window1 = openUtc.AddMinutes(120);   // +2h: morning momentum
             var window2 = openUtc + TimeSpan.FromTicks((closeUtc - openUtc).Ticks / 2); // midpoint
-            var window3 = closeUtc.AddMinutes(-15); // -15min: candle nearly complete
+            var window0 = closeUtc.AddMinutes(30);   // post-close: candle complete and definitive
 
             if (utcNow < window1) return window1;
             if (utcNow < window2) return window2;
-            if (utcNow < window3) return window3;
+            if (utcNow < window0) return window0;
 
             // All windows passed today — find next trading session's Window 1
             var nextRef = utcNow.AddDays(1);
