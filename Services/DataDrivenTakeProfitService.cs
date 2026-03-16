@@ -117,7 +117,7 @@ namespace PortfolioSignalWorker.Services
 
                 // Calcola range intraday
                 var intradayRanges = new List<double>();
-                for (int i = 0; i < Math.Min(highs.Count, lows.Count); i++)
+                for (int i = 0; i < Math.Min(closes.Count, Math.Min(highs.Count, lows.Count)); i++)
                 {
                     if (closes[i] > 0)
                     {
