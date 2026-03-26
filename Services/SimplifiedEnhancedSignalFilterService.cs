@@ -301,6 +301,19 @@ namespace PortfolioSignalWorker.Services
             if (!isMacroBullish)
                 _logger.LogInformation($"   🌍 Macro filter: SPY bearish — BUY signals suppressed for {symbol}");
 
+            // 🔪 FALLING KNIFE PROTECTION: block BUY if price dropped >3% from last signal
+            var lastSignal = await GetLastSentSignalAsync(symbol);
+            if (lastSignal != null && lastSignal.Price > 0 && enhanced.Price > 0)
+            {
+                var priceDrop = (lastSignal.Price - enhanced.Price) / lastSignal.Price;
+                if (priceDrop > 0.03)
+                {
+                    _logger.LogInformation($"   🔪 FALLING KNIFE: {symbol} dropped {priceDrop:P1} from last signal price {lastSignal.Price:F2} → current {enhanced.Price:F2}, BUY blocked");
+                    // Still allow Warning signals through — skip only BUY logic below
+                    goto checkWarning;
+                }
+            }
+
             // 🚀 STRONG BUY
             if (IsStrongBuySetup(enhanced))
             {
@@ -323,6 +336,7 @@ namespace PortfolioSignalWorker.Services
                     "MEDIUM BUY: Good technical setup with volume confirmation");
             }
 
+            checkWarning:
             // ⚠️ WARNING (allowed even in bearish macro — it's informational/protective)
             if (IsWarningSetup(enhanced))
             {
@@ -776,6 +790,17 @@ namespace PortfolioSignalWorker.Services
         private async Task<List<StockIndicator>> GetHistoricalDataAsync(string symbol, int periods)
         {
             return await GetHistoricalDataWithCacheAsync(symbol, periods);
+        }
+
+        private async Task<TradingSignal?> GetLastSentSignalAsync(string symbol)
+        {
+            var filter = Builders<TradingSignal>.Filter.And(
+                Builders<TradingSignal>.Filter.Eq(x => x.Symbol, symbol),
+                Builders<TradingSignal>.Filter.Eq(x => x.Sent, true),
+                Builders<TradingSignal>.Filter.In(x => x.Type, new[] { SignalType.Buy })
+            );
+            var sort = Builders<TradingSignal>.Sort.Descending(x => x.CreatedAt);
+            return await _signalCollection.Find(filter).Sort(sort).FirstOrDefaultAsync();
         }
 
         private async Task<bool> HasRecentSignalAsync(string symbol, TimeSpan timeWindow)
