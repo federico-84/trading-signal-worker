@@ -91,8 +91,8 @@ public class SimplifiedEnhancedWorker : BackgroundService
 
                 if (!symbolsToProcess.Any())
                 {
-                    _logger.LogInformation("📊 No symbols ready for enhanced analysis");
-                    await Task.Delay(TimeSpan.FromMinutes(3), stoppingToken);
+                    _logger.LogDebug($"📊 No symbols ready for enhanced analysis");
+                    await Task.Delay(await CalculateWaitTimeAsync(), stoppingToken);
                     continue;
                 }
 
@@ -151,8 +151,8 @@ public class SimplifiedEnhancedWorker : BackgroundService
                 // Daily optimization
                 await CheckDailyOptimization();
 
-                // Adaptive wait time
-                var waitTime = CalculateWaitTime(symbolsToProcess);
+                // Sleep exactly until the next symbol is due
+                var waitTime = await CalculateWaitTimeAsync();
                 await Task.Delay(waitTime, stoppingToken);
             }
             catch (Exception ex)
@@ -214,7 +214,7 @@ public class SimplifiedEnhancedWorker : BackgroundService
             var signal = await _enhancedSignalFilter.AnalyzeEnhancedSignalAsync(watchlistSymbol.Symbol, indicator);
 
             // 3. Save indicator data
-            await SaveIndicatorSmartAsync(indicator);
+            await SaveIndicatorSmartAsync(indicator, analysisMode);
 
             if (signal != null)
             {
@@ -324,21 +324,28 @@ public class SimplifiedEnhancedWorker : BackgroundService
             return (false, null);
         }
     }
-    private async Task SaveIndicatorSmartAsync(StockIndicator indicator)
+    private async Task SaveIndicatorSmartAsync(StockIndicator indicator, AnalysisMode mode)
     {
         try
         {
             var today = indicator.CreatedAt.Date;
             var indicatorCollection = _mongo.GetDatabase().GetCollection<StockIndicator>("Indicators");
 
-            var exists = await indicatorCollection
+            var existing = await indicatorCollection
                 .Find(x => x.Symbol == indicator.Symbol && x.CreatedAt.Date == today)
-                .AnyAsync();
+                .FirstOrDefaultAsync();
 
-            if (!exists)
+            if (existing == null)
             {
                 await _mongo.SaveIndicatorAsync(indicator);
                 _logger.LogDebug($"💾 Saved NEW indicator: {indicator.Symbol} @ {today:yyyy-MM-dd}");
+            }
+            else if (mode == AnalysisMode.OffHoursMonitor)
+            {
+                // Window 0 post-close: candela completa — aggiorna il record con i dati definitivi
+                var filter = Builders<StockIndicator>.Filter.Eq(x => x.Id, existing.Id);
+                await indicatorCollection.ReplaceOneAsync(filter, indicator);
+                _logger.LogInformation($"🔄 Updated indicator (post-close complete candle): {indicator.Symbol} @ {today:yyyy-MM-dd}");
             }
             else
             {
@@ -710,18 +717,25 @@ public class SimplifiedEnhancedWorker : BackgroundService
         }
     }
 
-    private TimeSpan CalculateWaitTime(List<(WatchlistSymbol symbol, AnalysisMode mode)> processedSymbols)
+    private async Task<TimeSpan> CalculateWaitTimeAsync()
     {
-        var hasActiveMarket = processedSymbols.Any(x => x.mode == AnalysisMode.FullAnalysis);
+        const int maxWaitMinutes = 120;  // cap: svegliati almeno ogni 2 ore (manutenzione, ecc.)
+        const int minWaitSeconds = 30;   // cap minimo: non ricominciare subito se ci sono molti simboli in batch
 
-        if (hasActiveMarket)
-        {
-            return TimeSpan.FromMinutes(4); // Shorter wait during active market
-        }
-        else
-        {
-            return TimeSpan.FromMinutes(10); // Longer wait when markets closed
-        }
+        var nextDue = await _symbolSelection.GetNextDueTimeAsync();
+        if (nextDue == null)
+            return TimeSpan.FromMinutes(maxWaitMinutes);
+
+        var wait = nextDue.Value - DateTime.UtcNow;
+
+        if (wait <= TimeSpan.Zero)
+            return TimeSpan.FromSeconds(minWaitSeconds);
+
+        if (wait.TotalMinutes > maxWaitMinutes)
+            return TimeSpan.FromMinutes(maxWaitMinutes);
+
+        _logger.LogInformation($"💤 Next analysis at {nextDue.Value:HH:mm:ss} UTC — sleeping {wait.TotalMinutes:F0}m");
+        return wait;
     }
 
     // 🆕 AGGIORNATO: Counter per segnali data-driven

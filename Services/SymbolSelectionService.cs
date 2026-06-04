@@ -476,6 +476,18 @@ namespace PortfolioSignalWorker.Services
                 .ToListAsync();
         }
 
+        public async Task<DateTime?> GetNextDueTimeAsync()
+        {
+            var filter = Builders<WatchlistSymbol>.Filter.Eq(x => x.IsActive, true);
+            var sort = Builders<WatchlistSymbol>.Sort.Ascending(x => x.NextAnalysis);
+            var next = await _watchlistCollection
+                .Find(filter)
+                .Sort(sort)
+                .Limit(1)
+                .FirstOrDefaultAsync();
+            return next?.NextAnalysis;
+        }
+
         public async Task UpdateSymbolNextAnalysis(string symbol, DateTime nextAnalysis)
         {
             var filter = Builders<WatchlistSymbol>.Filter.Eq(x => x.Symbol, symbol);

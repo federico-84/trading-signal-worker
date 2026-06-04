@@ -51,9 +51,9 @@ namespace PortfolioSignalWorker.Services
                 // OffHoursMonitor => double.MaxValue (mai)
 
                 // 🔧 NUOVE SOGLIE RILASSATE:
-                AnalysisMode.FullAnalysis => 70.0,
-                AnalysisMode.PreMarketWatch => 70.0,
-                AnalysisMode.OffHoursMonitor => 70.0,   // post-close Window 0: candela completa, segnali affidabili
+                AnalysisMode.FullAnalysis => 63.0,
+                AnalysisMode.PreMarketWatch => 63.0,
+                AnalysisMode.OffHoursMonitor => 63.0,   // post-close Window 0: candela completa, segnali affidabili
                 AnalysisMode.Skip => double.MaxValue,   // Skip rimane disabilitato
                 _ => 50.0
             };

@@ -367,9 +367,9 @@ namespace PortfolioSignalWorker.Services
 
         private bool IsMediumBuySetup(EnhancedIndicator enhanced)
         {
-            return enhanced.ConfluenceScore >= 55 &&
+            return enhanced.ConfluenceScore >= 52 &&
                    enhanced.TrendDirection != TrendDirection.Bearish &&
-                   enhanced.RSI >= 20 && enhanced.RSI <= 45 &&
+                   enhanced.RSI >= 20 && enhanced.RSI <= 50 &&
                    (enhanced.MACD_Histogram > 0 || enhanced.MACD_Histogram_CrossUp || enhanced.MACD_Trend == "BULLISH") &&
                    enhanced.VolumeRatio > 0.7;
         }
