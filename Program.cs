@@ -70,6 +70,16 @@ var builder = Host.CreateDefaultBuilder(args)
             return new SymbolSelectionService(mongo.GetDatabase(), yahooFinance, logger);
         });
 
+        // Signal Performance Report
+        services.AddSingleton<SignalPerformanceReportService>(provider =>
+        {
+            var mongo = provider.GetRequiredService<MongoService>();
+            var yahoo = provider.GetRequiredService<YahooFinanceService>();
+            var telegram = provider.GetRequiredService<TelegramService>();
+            var logger = provider.GetRequiredService<ILogger<SignalPerformanceReportService>>();
+            return new SignalPerformanceReportService(mongo.GetDatabase(), yahoo, telegram, logger);
+        });
+
         // ===== WORKER SERVICE =====
 
         // Enhanced Worker (Simplified)

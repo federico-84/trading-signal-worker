@@ -11,6 +11,7 @@ namespace PortfolioSignalWorker.Services
     {
         private readonly IMongoCollection<StockIndicator> _indicatorCollection;
         private readonly IMongoCollection<TradingSignal> _signalCollection;
+        private readonly IMongoCollection<WatchlistSymbol> _watchlistCollection;
         private readonly YahooFinanceService _yahooFinance;
         private readonly ILogger<SimplifiedEnhancedSignalFilterService> _logger;
 
@@ -25,6 +26,7 @@ namespace PortfolioSignalWorker.Services
         {
             _indicatorCollection = database.GetCollection<StockIndicator>("Indicators");
             _signalCollection = database.GetCollection<TradingSignal>("TradingSignals");
+            _watchlistCollection = database.GetCollection<WatchlistSymbol>("WatchlistSymbols");
             _yahooFinance = yahooFinance;
             _logger = logger;
         }
@@ -320,7 +322,7 @@ namespace PortfolioSignalWorker.Services
                 if (!isMacroBullish)
                     return null; // Macro downtrend: skip buy to avoid catching a falling knife
 
-                return CreateEnhancedSignal(symbol, enhanced, SignalType.Buy,
+                return await CreateEnhancedSignalAsync(symbol, enhanced, SignalType.Buy,
                     Math.Min(95, enhanced.ConfluenceScore + 5),
                     "STRONG BUY: Excellent confluence with confirmed breakout");
             }
@@ -331,7 +333,7 @@ namespace PortfolioSignalWorker.Services
                 if (!isMacroBullish)
                     return null;
 
-                return CreateEnhancedSignal(symbol, enhanced, SignalType.Buy,
+                return await CreateEnhancedSignalAsync(symbol, enhanced, SignalType.Buy,
                     Math.Min(85, enhanced.ConfluenceScore),
                     "MEDIUM BUY: Good technical setup with volume confirmation");
             }
@@ -340,7 +342,7 @@ namespace PortfolioSignalWorker.Services
             // ⚠️ WARNING (allowed even in bearish macro — it's informational/protective)
             if (IsWarningSetup(enhanced))
             {
-                return CreateEnhancedSignal(symbol, enhanced, SignalType.Warning,
+                return await CreateEnhancedSignalAsync(symbol, enhanced, SignalType.Warning,
                     Math.Min(75, enhanced.ConfluenceScore),
                     "WARNING: Extreme oversold near strong support");
             }
@@ -721,7 +723,29 @@ namespace PortfolioSignalWorker.Services
 
         #region Utility Methods
 
-        private TradingSignal CreateEnhancedSignal(string symbol, EnhancedIndicator enhanced, SignalType type,
+        private async Task<string?> GetOrFetchIsinAsync(string symbol)
+        {
+            var entry = await _watchlistCollection
+                .Find(x => x.Symbol == symbol)
+                .FirstOrDefaultAsync();
+
+            if (entry == null) return null;
+
+            if (!string.IsNullOrEmpty(entry.Isin))
+                return entry.Isin;
+
+            // First time: try to fetch from Yahoo and persist it
+            var isin = await _yahooFinance.TryGetIsinAsync(symbol);
+            if (!string.IsNullOrEmpty(isin))
+            {
+                var update = Builders<WatchlistSymbol>.Update.Set(x => x.Isin, isin);
+                await _watchlistCollection.UpdateOneAsync(x => x.Symbol == symbol, update);
+            }
+
+            return isin;
+        }
+
+        private async Task<TradingSignal> CreateEnhancedSignalAsync(string symbol, EnhancedIndicator enhanced, SignalType type,
             double confidence, string baseReason)
         {
             var reasons = new List<string> { baseReason };
@@ -742,9 +766,12 @@ namespace PortfolioSignalWorker.Services
 
             reasons.Add($"Quality score: {enhanced.ConfluenceScore}/100");
 
+            var isin = await GetOrFetchIsinAsync(symbol);
+
             return new TradingSignal
             {
                 Symbol = symbol,
+                Isin = isin,
                 Type = type,
                 Confidence = confidence,
                 Reason = string.Join(" | ", reasons),

@@ -10,6 +10,7 @@ namespace PortfolioSignalWorker.Models
         public ObjectId Id { get; set; }
         public string Market { get; set; } = "US";  // NEW: "US" or "EU"
         public string Symbol { get; set; }
+        public string Isin { get; set; }
         public string CompanyName { get; set; }
         public string Sector { get; set; }
         public string Industry { get; set; }

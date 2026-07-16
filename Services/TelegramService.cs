@@ -65,7 +65,19 @@ namespace PortfolioSignalWorker.Services
             var isDataDriven = !string.IsNullOrEmpty(signal.TakeProfitStrategy);
             var dataDrivenIndicator = isDataDriven ? " 🧠" : "";
 
-            var title = $"{modeEmoji} {signalEmoji} <b>{GetSignalTypeInItalian(signal.Type)} {signal.Symbol}</b> {marketFlag}{dataDrivenIndicator}";
+            var companyName = !string.IsNullOrEmpty(watchlistSymbol.CompanyName)
+                ? watchlistSymbol.CompanyName
+                : !string.IsNullOrEmpty(watchlistSymbol.Notes)
+                    ? watchlistSymbol.Notes.Split('~')[0].Trim()
+                    : null;
+
+            var symbolDisplay = companyName != null
+                ? $"{signal.Symbol} — {companyName}"
+                : signal.Symbol;
+
+            var isinDisplay = !string.IsNullOrEmpty(signal.Isin) ? $" <i>({signal.Isin})</i>" : "";
+
+            var title = $"{modeEmoji} {signalEmoji} <b>{GetSignalTypeInItalian(signal.Type)} {symbolDisplay}</b> {marketFlag}{dataDrivenIndicator}{isinDisplay}";
 
             var message = new StringBuilder();
             message.AppendLine(title);

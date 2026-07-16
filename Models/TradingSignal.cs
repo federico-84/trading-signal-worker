@@ -88,6 +88,7 @@ namespace PortfolioSignalWorker.Models
         public ObjectId Id { get; set; }
 
         public string Symbol { get; set; }
+        public string Isin { get; set; }
         public SignalType Type { get; set; }
         public double Confidence { get; set; }
         public string Reason { get; set; }

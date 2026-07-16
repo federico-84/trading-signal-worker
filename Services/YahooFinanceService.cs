@@ -358,6 +358,33 @@ public class YahooFinanceService
         if (previous == 0) return 0;
         return Math.Abs((current - previous) / previous) * 100;
     }
+
+    public async Task<string?> TryGetIsinAsync(string symbol)
+    {
+        try
+        {
+            var url = $"https://query2.finance.yahoo.com/v10/finance/quoteSummary/{symbol}?modules=assetProfile";
+            var response = await _http.GetStringAsync(url);
+            var data = JObject.Parse(response);
+
+            var profile = data["quoteSummary"]?["result"]?[0]?["assetProfile"];
+            var isin = profile?["isin"]?.Value<string>();
+
+            if (!string.IsNullOrEmpty(isin))
+            {
+                _logger.LogInformation($"[ISIN] ✅ {symbol} → {isin}");
+                return isin;
+            }
+
+            _logger.LogDebug($"[ISIN] ℹ️ {symbol}: not available from Yahoo (populate manually in MongoDB)");
+            return null;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug($"[ISIN] ⚠️ {symbol}: lookup failed — {ex.Message}");
+            return null;
+        }
+    }
 }
 
 /// <summary>

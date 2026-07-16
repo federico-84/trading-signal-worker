@@ -14,6 +14,7 @@ public class SimplifiedEnhancedWorker : BackgroundService
     private readonly SimplifiedEnhancedRiskManagementService _enhancedRiskManagement;
     private readonly SymbolSelectionService _symbolSelection;
     private readonly SmartMarketHoursService _smartMarketHours;
+    private readonly SignalPerformanceReportService _performanceReport;
     private readonly ILogger<SimplifiedEnhancedWorker> _logger;
 
     // Performance tracking
@@ -24,6 +25,7 @@ public class SimplifiedEnhancedWorker : BackgroundService
     private int _warningSignals = 0;
     private int _dataDrivenSignals = 0;
     private DateTime _lastOptimization = DateTime.MinValue;
+    private DateTime _lastWeeklyReport = DateTime.MinValue;
 
     // Symbols that returned 404 this session — skipped for the rest of the process lifetime
     private readonly HashSet<string> _delistedSymbols = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -36,6 +38,7 @@ public class SimplifiedEnhancedWorker : BackgroundService
         SimplifiedEnhancedRiskManagementService enhancedRiskManagement,
         SymbolSelectionService symbolSelection,
         SmartMarketHoursService smartMarketHours,
+        SignalPerformanceReportService performanceReport,
         ILogger<SimplifiedEnhancedWorker> logger)
     {
         _yahooFinance = yahooFinance;
@@ -45,6 +48,7 @@ public class SimplifiedEnhancedWorker : BackgroundService
         _enhancedRiskManagement = enhancedRiskManagement;
         _symbolSelection = symbolSelection;
         _smartMarketHours = smartMarketHours;
+        _performanceReport = performanceReport;
         _logger = logger;
     }
 
@@ -150,6 +154,9 @@ public class SimplifiedEnhancedWorker : BackgroundService
 
                 // Daily optimization
                 await CheckDailyOptimization();
+
+                // Weekly performance report (lunedì mattina)
+                await CheckWeeklyReportAsync();
 
                 // Sleep exactly until the next symbol is due
                 var waitTime = await CalculateWaitTimeAsync();
@@ -696,6 +703,20 @@ public class SimplifiedEnhancedWorker : BackgroundService
             {
                 _logger.LogError(ex, "Error in hourly maintenance");
             }
+        }
+    }
+
+    private async Task CheckWeeklyReportAsync()
+    {
+        var now = DateTime.UtcNow;
+
+        // Lunedì tra le 07:00 e 07:15 UTC, una volta a settimana
+        if (now.DayOfWeek == DayOfWeek.Monday &&
+            now.Hour == 7 && now.Minute < 15 &&
+            (now - _lastWeeklyReport).TotalHours >= 24)
+        {
+            _lastWeeklyReport = now;
+            await _performanceReport.SendWeeklyReportAsync();
         }
     }
 
