@@ -47,9 +47,8 @@ namespace PortfolioSignalWorker.Services
 
         private bool IsUSMarketOpen(DateTime utcNow)
         {
-            // Convert to EST/EDT (New York time)
             var nyTime = TimeZoneInfo.ConvertTimeFromUtc(utcNow,
-                TimeZoneInfo.FindSystemTimeZoneById("Eastern Standard Time"));
+                FindTimeZone("America/New_York", "Eastern Standard Time"));
 
             // Check if it's a weekday
             if (nyTime.DayOfWeek == DayOfWeek.Saturday || nyTime.DayOfWeek == DayOfWeek.Sunday)
@@ -66,7 +65,7 @@ namespace PortfolioSignalWorker.Services
         {
             var timeZoneId = GetEuropeanTimeZone(symbol);
             var localTime = TimeZoneInfo.ConvertTimeFromUtc(utcNow,
-                TimeZoneInfo.FindSystemTimeZoneById(timeZoneId));
+                FindTimeZone(timeZoneId, "Central European Standard Time"));
 
             // Check if it's a weekday
             if (localTime.DayOfWeek == DayOfWeek.Saturday || localTime.DayOfWeek == DayOfWeek.Sunday)
@@ -78,18 +77,21 @@ namespace PortfolioSignalWorker.Services
             return localTime.TimeOfDay >= marketOpen && localTime.TimeOfDay <= marketClose;
         }
 
+        // Resolves a timezone by trying the IANA name first (Linux/Docker), then the Windows name.
+        protected static TimeZoneInfo FindTimeZone(string ianaId, string windowsId)
+        {
+            try { return TimeZoneInfo.FindSystemTimeZoneById(ianaId); } catch { }
+            try { return TimeZoneInfo.FindSystemTimeZoneById(windowsId); } catch { }
+            return TimeZoneInfo.Utc;
+        }
+
         protected string GetEuropeanTimeZone(string symbol)
         {
+            // Return IANA IDs — FindTimeZone() handles fallback to Windows IDs
             return symbol switch
             {
-                var s when s.Contains(".MI") => "Central European Standard Time", // Milan
-                var s when s.Contains(".AS") => "Central European Standard Time", // Amsterdam
-                var s when s.Contains(".DE") => "Central European Standard Time", // Frankfurt
-                var s when s.Contains(".PA") => "Central European Standard Time", // Paris
-                var s when s.Contains(".SW") => "Central European Standard Time", // Swiss
-                var s when s.Contains(".L") => "GMT Standard Time",               // London
-                var s when s.Contains(".MC") => "Central European Standard Time", // Madrid
-                _ => "Central European Standard Time"
+                var s when s.Contains(".L") => "Europe/London",
+                _ => "Europe/Paris"   // CET/CEST covers MI, AS, DE, PA, SW, MC
             };
         }
 
@@ -111,7 +113,7 @@ namespace PortfolioSignalWorker.Services
         private TimeSpan GetTimeUntilUSMarketOpen(DateTime utcNow)
         {
             var nyTime = TimeZoneInfo.ConvertTimeFromUtc(utcNow,
-                TimeZoneInfo.FindSystemTimeZoneById("Eastern Standard Time"));
+                FindTimeZone("America/New_York", "Eastern Standard Time"));
 
             var marketOpen = new TimeSpan(9, 30, 0);
 
@@ -137,7 +139,7 @@ namespace PortfolioSignalWorker.Services
         {
             var timeZoneId = GetEuropeanTimeZone(symbol);
             var localTime = TimeZoneInfo.ConvertTimeFromUtc(utcNow,
-                TimeZoneInfo.FindSystemTimeZoneById(timeZoneId));
+                FindTimeZone(timeZoneId, "Central European Standard Time"));
 
             var (marketOpen, _) = GetEuropeanMarketHours(symbol);
 

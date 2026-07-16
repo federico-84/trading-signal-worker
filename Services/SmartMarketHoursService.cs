@@ -179,22 +179,21 @@ namespace PortfolioSignalWorker.Services
         /// </summary>
         private (DateTime openUtc, DateTime closeUtc) GetMarketSessionUtc(string symbol, DateTime referenceUtc)
         {
-            string tzId;
             TimeSpan openLocal, closeLocal;
 
+            TimeZoneInfo tz;
             if (GetMarketFromSymbol(symbol) == MarketRegion.US)
             {
-                tzId = "Eastern Standard Time";
+                tz = FindTimeZone("America/New_York", "Eastern Standard Time");
                 openLocal = new TimeSpan(9, 30, 0);
                 closeLocal = new TimeSpan(16, 0, 0);
             }
             else
             {
-                tzId = GetEuropeanTimeZone(symbol);
+                tz = FindTimeZone(GetEuropeanTimeZone(symbol), "Central European Standard Time");
                 (openLocal, closeLocal) = GetEuropeanMarketHours(symbol);
             }
 
-            var tz = TimeZoneInfo.FindSystemTimeZoneById(tzId);
             var localRef = TimeZoneInfo.ConvertTimeFromUtc(referenceUtc, tz);
 
             // Advance to the nearest weekday (skips Sat/Sun)
