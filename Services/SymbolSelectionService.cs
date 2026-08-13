@@ -1,6 +1,7 @@
 ﻿using MongoDB.Driver;
 using Newtonsoft.Json.Linq;
 using PortfolioSignalWorker.Models;
+using static PortfolioSignalWorker.Models.TradingSignal;
 using static PortfolioSignalWorker.Services.SmartMarketHoursService;
 
 namespace PortfolioSignalWorker.Services
@@ -10,6 +11,7 @@ namespace PortfolioSignalWorker.Services
         private readonly IMongoCollection<WatchlistSymbol> _watchlistCollection;
         private readonly IMongoCollection<CoreSymbol> _coreSymbolsCollection;
         private readonly IMongoCollection<RotationSymbol> _rotationSymbolsCollection;
+        private readonly IMongoCollection<TakeProfitPerformanceRecord> _performanceCollection;
         private readonly YahooFinanceService _yahooFinance;
         private readonly ILogger<SymbolSelectionService> _logger;
 
@@ -21,10 +23,98 @@ namespace PortfolioSignalWorker.Services
             _watchlistCollection = database.GetCollection<WatchlistSymbol>("WatchlistSymbols");
             _coreSymbolsCollection = database.GetCollection<CoreSymbol>("CoreSymbols");
             _rotationSymbolsCollection = database.GetCollection<RotationSymbol>("RotationSymbols");
+            _performanceCollection = database.GetCollection<TakeProfitPerformanceRecord>("TakeProfitPerformance");
             _yahooFinance = yahooFinance;
             _logger = logger;
 
             CreateIndexes();
+        }
+
+        /// <summary>
+        /// Incrementa il contatore SignalsGenerated per un simbolo. Va chiamato ogni volta
+        /// che viene generato un segnale (indipendentemente dal fatto che venga poi inviato),
+        /// altrimenti OptimizeWatchlist e il filtro "salta i perdenti" restano ciechi per sempre.
+        /// </summary>
+        public async Task IncrementSignalsGenerated(string symbol)
+        {
+            var filter = Builders<WatchlistSymbol>.Filter.Eq(x => x.Symbol, symbol);
+            var update = Builders<WatchlistSymbol>.Update.Inc(x => x.SignalsGenerated, 1);
+            await _watchlistCollection.UpdateOneAsync(filter, update);
+        }
+
+        /// <summary>
+        /// Ricalcola SuccessRate/SuccessfulSignals/AvgReturn per ogni simbolo a partire dagli
+        /// esiti REALI in TakeProfitPerformance (l'unica fonte di verità già esistente e
+        /// funzionante su Hit/StoppedOut/PartialHit), invece di lasciarli a 0 per sempre.
+        /// </summary>
+        public async Task RefreshPerformanceStatsAsync()
+        {
+            try
+            {
+                var completedRecords = await _performanceCollection
+                    .Find(Builders<TakeProfitPerformanceRecord>.Filter.Eq(x => x.IsCompleted, true))
+                    .ToListAsync();
+
+                if (!completedRecords.Any())
+                {
+                    _logger.LogInformation("No completed TakeProfitPerformance records yet — skipping stats refresh");
+                    return;
+                }
+
+                var updates = new List<WriteModel<WatchlistSymbol>>();
+
+                foreach (var group in completedRecords.GroupBy(r => r.Symbol))
+                {
+                    var records = group.ToList();
+                    var successful = records.Count(r =>
+                        r.ActualResult == SimplifiedTakeProfitResult.Hit ||
+                        r.ActualResult == SimplifiedTakeProfitResult.PartialHit);
+                    var successRate = (double)successful / records.Count * 100;
+                    var avgReturn = records
+                        .Where(r => r.ActualReturn.HasValue)
+                        .Select(r => r.ActualReturn!.Value)
+                        .DefaultIfEmpty(0)
+                        .Average();
+
+                    var filter = Builders<WatchlistSymbol>.Filter.Eq(x => x.Symbol, group.Key);
+                    var update = Builders<WatchlistSymbol>.Update
+                        .Set(x => x.SuccessfulSignals, successful)
+                        .Set(x => x.SuccessRate, successRate)
+                        .Set(x => x.AvgReturn, avgReturn);
+
+                    updates.Add(new UpdateOneModel<WatchlistSymbol>(filter, update));
+                }
+
+                if (updates.Any())
+                {
+                    await _watchlistCollection.BulkWriteAsync(updates);
+                    _logger.LogInformation($"📊 Refreshed real performance stats for {updates.Count} symbols from TakeProfitPerformance");
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error refreshing watchlist performance stats");
+            }
+        }
+
+        /// <summary>
+        /// Classifica la volatilita' di tutti i simboli attivi. ClassifySymbolVolatility esiste
+        /// da tempo ma non veniva mai chiamata da nessun worker: AverageVolatilityPercent restava
+        /// sempre 0.0.
+        /// </summary>
+        public async Task RefreshVolatilityClassificationAsync()
+        {
+            var activeSymbols = await _watchlistCollection
+                .Find(Builders<WatchlistSymbol>.Filter.Eq(x => x.IsActive, true))
+                .ToListAsync();
+
+            _logger.LogInformation($"🌡️ Classifying volatility for {activeSymbols.Count} active symbols...");
+
+            foreach (var symbol in activeSymbols)
+            {
+                await ClassifySymbolVolatility(symbol);
+                await Task.Delay(300); // Rate limiting su Yahoo Finance
+            }
         }
 
 
@@ -213,7 +303,6 @@ namespace PortfolioSignalWorker.Services
                     {
                         Symbol = coreSymbol.Symbol,
                         Tier = tier,
-                        MonitoringFrequency = GetMonitoringFrequency(tier),
                         NextAnalysis = DateTime.UtcNow.Add(TimeSpan.FromMinutes(i * 2)),
                         IsCore = true,          // NEVER ROTATE
                         CanRotate = false,      // PROTECTED
@@ -275,7 +364,6 @@ namespace PortfolioSignalWorker.Services
                 {
                     Symbol = symbol,
                     Tier = SymbolTier.Tier3_Monitor, // Start in Tier 3
-                    MonitoringFrequency = TimeSpan.FromHours(4),
                     NextAnalysis = DateTime.UtcNow.Add(TimeSpan.FromMinutes((coreSymbols.Count + i) * 2)),
                     IsCore = false,         // CAN ROTATE
                     CanRotate = true,       // ELIGIBLE FOR ROTATION
@@ -391,17 +479,6 @@ namespace PortfolioSignalWorker.Services
             }
         }
 
-        private TimeSpan GetMonitoringFrequency(SymbolTier tier)
-        {
-            return tier switch
-            {
-                SymbolTier.Tier1_Priority => TimeSpan.FromMinutes(30),
-                SymbolTier.Tier2_Standard => TimeSpan.FromHours(2),
-                SymbolTier.Tier3_Monitor => TimeSpan.FromHours(4),
-                _ => TimeSpan.FromHours(4)
-            };
-        }
-
         private async Task EnrichSymbolData(WatchlistSymbol symbol)
         {
             try
@@ -446,8 +523,7 @@ namespace PortfolioSignalWorker.Services
             _logger.LogInformation("Tier Distribution:");
             foreach (var tier in tierCounts)
             {
-                var frequency = GetMonitoringFrequency(tier.Key);
-                _logger.LogInformation($"  {tier.Key}: {tier.Value} symbols (every {frequency})");
+                _logger.LogInformation($"  {tier.Key}: {tier.Value} symbols");
             }
 
             _logger.LogInformation("Market Distribution:");
@@ -533,6 +609,11 @@ namespace PortfolioSignalWorker.Services
         {
             _logger.LogInformation("Starting SAFE watchlist optimization (core symbols protected)...");
 
+            // Aggiorna SuccessRate/AvgReturn/volatilita' reali PRIMA di leggere i simboli,
+            // altrimenti la selezione degli underperformer sotto lavora su dati stantii.
+            await RefreshPerformanceStatsAsync();
+            await RefreshVolatilityClassificationAsync();
+
             // Get ONLY rotation symbols (core symbols are protected)
             var rotationSymbols = await _watchlistCollection
                 .Find(Builders<WatchlistSymbol>.Filter.And(
@@ -614,7 +695,6 @@ namespace PortfolioSignalWorker.Services
                         {
                             Symbol = rotationSymbol.Symbol,
                             Tier = SymbolTier.Tier3_Monitor, // New symbols start in Tier 3
-                            MonitoringFrequency = TimeSpan.FromHours(4),
                             NextAnalysis = DateTime.UtcNow.Add(TimeSpan.FromMinutes(analyzed * 5)),
                             IsCore = false,
                             CanRotate = true,
@@ -674,14 +754,12 @@ namespace PortfolioSignalWorker.Services
             {
                 var symbol = sortedSymbols[i];
                 var newTier = AssignTier(i, symbol.OverallScore);
-                var newFrequency = GetMonitoringFrequency(newTier);
 
                 if (symbol.Tier != newTier)
                 {
                     var filter = Builders<WatchlistSymbol>.Filter.Eq(x => x.Id, symbol.Id);
                     var update = Builders<WatchlistSymbol>.Update
-                        .Set(x => x.Tier, newTier)
-                        .Set(x => x.MonitoringFrequency, newFrequency);
+                        .Set(x => x.Tier, newTier);
 
                     await _watchlistCollection.UpdateOneAsync(filter, update);
 

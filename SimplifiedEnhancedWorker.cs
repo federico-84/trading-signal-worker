@@ -239,6 +239,10 @@ public class SimplifiedEnhancedWorker : BackgroundService
                         return (false, null);
                     }
 
+                    // Conta il segnale come generato (a prescindere dal fatto che venga poi
+                    // inviato) — alimenta SignalsGenerated, usato per il rotation/skip poor performers.
+                    await _symbolSelection.IncrementSignalsGenerated(watchlistSymbol.Symbol);
+
                     // Log DOPO il risk management
                     _logger.LogInformation($"🎯 Risk Management completed for {watchlistSymbol.Symbol}: " +
                         $"SL: ${signal.StopLoss?.ToString("F2") ?? "NULL"} ({signal.StopLossPercent?.ToString("F1") ?? "NULL"}%), " +

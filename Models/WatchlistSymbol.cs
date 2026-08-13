@@ -18,7 +18,6 @@ namespace PortfolioSignalWorker.Models
 
         // Tier Management
         public SymbolTier Tier { get; set; }
-        public TimeSpan MonitoringFrequency { get; set; }
         public DateTime? LastAnalyzed { get; set; }
         public DateTime NextAnalysis { get; set; }
 

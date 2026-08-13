@@ -497,7 +497,10 @@ namespace PortfolioSignalWorker.Services
                 if ((now - _macroCache.CachedAt).TotalHours < 4)
                     return _macroCache.IsBullish;
 
-                var spyData = await _yahooFinance.GetHistoricalDataAsync("SPY", 60);
+                // 100 giorni di calendario (non 60): servono ~50+ candele di trading per EMA50,
+                // e 60gg calendario ne restituisce sempre ~41 (weekend/festivi) — il filtro
+                // finiva SEMPRE nel ramo "dati insufficienti" e restava bullish di default per sempre.
+                var spyData = await _yahooFinance.GetHistoricalDataAsync("SPY", 100);
                 var closes = spyData["c"]?.ToObject<List<double>>() ?? new List<double>();
 
                 if (closes.Count < 50)
@@ -677,7 +680,9 @@ namespace PortfolioSignalWorker.Services
         {
             if (historical.Count < 5) return 5;
 
-            var recent = historical.TakeLast(5).ToList();
+            // historical e' ordinato dal piu' recente al piu' vecchio: Take(5) prende i 5 piu'
+            // recenti, poi si inverte per riportarli in ordine cronologico (vecchio -> nuovo).
+            var recent = historical.Take(5).Reverse().ToList();
             var momentum = recent.Last().MACD_Histogram - recent.First().MACD_Histogram;
 
             return Math.Min(10, Math.Max(1, 5 + momentum * 10));
@@ -687,7 +692,11 @@ namespace PortfolioSignalWorker.Services
         {
             if (historical.Count < 8) return "UNKNOWN";
 
-            var recent = historical.TakeLast(8).Select(h => h.MACD_Histogram).ToList();
+            // historical e' ordinato dal piu' recente al piu' vecchio: Take(8) prende gli 8 piu'
+            // recenti, poi si inverte per riportarli in ordine cronologico (vecchio -> nuovo).
+            // BUG PRECEDENTE: TakeLast(8) prendeva gli 8 piu' VECCHI della finestra (~100gg),
+            // quindi MACD_Trend giudicava il momentum di ~4 mesi fa invece di quello recente.
+            var recent = historical.Take(8).Select(h => h.MACD_Histogram).Reverse().ToList();
 
             var increasing = 0;
             var decreasing = 0;
