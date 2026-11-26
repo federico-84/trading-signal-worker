@@ -144,7 +144,17 @@ namespace PortfolioSignalWorker.Services
                 // STEP 4: Salva in MongoDB (incrementale)
                 await SaveNewIndicatorsAsync(symbol, indicators);
 
-                return indicators.Take(periods).ToList();
+                // Stesso formato del ramo HIT: i consumatori richiedono l'ordine newest-first.
+                // I dati appena scaricati vanno uniti a quelli gia' in cache: da soli sono ~43
+                // (i primi 26 servono al MACD), troppo pochi per l'EMA50. A parita' di giorno
+                // vince il dato fresco (Concat lo mette per primo).
+                return indicators
+                    .Concat(mongoData)
+                    .GroupBy(x => x.CreatedAt.Date)
+                    .Select(g => g.First())
+                    .OrderByDescending(x => x.CreatedAt)
+                    .Take(periods)
+                    .ToList();
             }
             catch (SymbolNotFoundException)
             {
